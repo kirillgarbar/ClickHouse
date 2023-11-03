@@ -2,6 +2,7 @@
 #include <Parsers/ASTSelectWithUnionQuery.h>
 #include <Parsers/ASTSetQuery.h>
 #include <Parsers/ParserAlterQuery.h>
+#include <Parsers/ParserModifyEngineQuery.h>
 #include <Parsers/ParserCheckQuery.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Parsers/ParserDescribeTableQuery.h>
@@ -52,6 +53,7 @@ bool ParserQueryWithOutput::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
     ParserShowProcesslistQuery show_processlist_p;
     ParserCreateQuery create_p;
     ParserAlterQuery alter_p;
+    ParserModifyEngineQuery modify_engine_p;
     ParserRenameQuery rename_p;
     ParserDropQuery drop_p;
     ParserUndropQuery undrop_p;
@@ -84,6 +86,7 @@ bool ParserQueryWithOutput::parseImpl(Pos & pos, ASTPtr & node, Expected & expec
         || show_processlist_p.parse(pos, query, expected)
         || create_p.parse(pos, query, expected)
         || alter_p.parse(pos, query, expected)
+        || modify_engine_p.parse(pos, query, expected)
         || rename_p.parse(pos, query, expected)
         || drop_p.parse(pos, query, expected)
         || undrop_p.parse(pos, query, expected)
