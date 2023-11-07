@@ -11,6 +11,7 @@
 #include <Interpreters/MutationsNonDeterministicHelpers.h>
 #include <Interpreters/QueryLog.h>
 #include <Interpreters/executeDDLQueryOnCluster.h>
+#include <Interpreters/executeQuery.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include <Parsers/ASTAssignment.h>
 #include <Parsers/ASTIdentifier_fwd.h>
@@ -27,6 +28,7 @@
 #include <Functions/UserDefined/UserDefinedSQLFunctionVisitor.h>
 
 #include <boost/range/algorithm_ext/push_back.hpp>
+#include <fmt/core.h>
 
 #include <algorithm>
 
@@ -53,14 +55,14 @@ InterpreterModifyEngineQuery::InterpreterModifyEngineQuery(const ASTPtr & query_
 BlockIO InterpreterModifyEngineQuery::execute()
 {
     FunctionNameNormalizer().visit(query_ptr.get());
-    const auto & alter = query_ptr->as<ASTModifyEngineQuery &>();
+    const auto & query = query_ptr->as<ASTModifyEngineQuery &>();
 
     BlockIO res;
 
     if (!UserDefinedSQLFunctionFactory::instance().empty())
         UserDefinedSQLFunctionVisitor::visit(query_ptr);
 
-    auto table_id = getContext()->resolveStorageID(alter, Context::ResolveOrdinary);
+    auto table_id = getContext()->resolveStorageID(query, Context::ResolveOrdinary);
     query_ptr->as<ASTModifyEngineQuery &>().setDatabase(table_id.database_name);
     StoragePtr table = DatabaseCatalog::instance().tryGetTable(table_id, getContext());
 
@@ -82,6 +84,24 @@ BlockIO InterpreterModifyEngineQuery::execute()
     visitor.visit(query_ptr);
 
     auto alter_lock = table->lockForAlter(getContext()->getSettingsRef().lock_acquire_timeout);
+
+    String name = query.getTable();
+    String new_name = fmt::format("{0}_new", name);
+    String old_name = fmt::format("{0}_old", name);
+
+    String query1 = fmt::format("CREATE TABLE {0} AS {1} ENGINE MergeTree() ORDER BY uid", new_name, name);
+    String query2 = fmt::format("SYSTEM STOP MERGES;");
+    String query3 = fmt::format("ALTER TABLE {0} ATTACH PARTITION ID 'all' FROM {1};", new_name, name);
+    String query4 = fmt::format("SYSTEM START MERGES;");
+    String query5 = fmt::format("RENAME TABLE {0} TO {1};", name, old_name);
+    String query6 = fmt::format("RENAME TABLE {0} TO {1};", new_name, name);
+    auto query_context = Context::createCopy(context);
+    executeQuery(query1, query_context, true);
+    executeQuery(query2, query_context, true);
+    executeQuery(query3, query_context, true);
+    executeQuery(query4, query_context, true);
+    executeQuery(query5, query_context, true);
+    executeQuery(query6, query_context, true);
 
     return res;
 }
