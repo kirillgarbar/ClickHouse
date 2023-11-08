@@ -14,6 +14,9 @@
 #include <Interpreters/executeQuery.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include <Parsers/ASTAssignment.h>
+#include "Formats/FormatSettings.h"
+#include "IO/WriteBufferFromString.h"
+#include "Parsers/ASTCreateQuery.h"
 #include <Parsers/ASTIdentifier_fwd.h>
 #include <Parsers/ASTColumnDeclaration.h>
 #include <Parsers/queryToString.h>
@@ -56,6 +59,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
 {
     FunctionNameNormalizer().visit(query_ptr.get());
     const auto & query = query_ptr->as<ASTModifyEngineQuery &>();
+    const auto & storage = query.storage->as<ASTStorage &>();
 
     BlockIO res;
 
@@ -88,14 +92,21 @@ BlockIO InterpreterModifyEngineQuery::execute()
     String name = query.getTable();
     String new_name = fmt::format("{0}_new", name);
     String old_name = fmt::format("{0}_old", name);
+    String engine_name = storage.engine->name;
 
-    String query1 = fmt::format("CREATE TABLE {0} AS {1} ENGINE MergeTree() ORDER BY uid", new_name, name);
+    WriteBufferFromOwnString buffer;
+    IAST::FormatSettings format_settings{buffer, true};
+    storage.format(format_settings);
+    String storage_formatted = buffer.str();
+
+    String query1 = fmt::format("CREATE TABLE {0} AS {1} {2}", new_name, name, storage_formatted);
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     String query3 = fmt::format("ALTER TABLE {0} ATTACH PARTITION ID 'all' FROM {1};", new_name, name);
     String query4 = fmt::format("SYSTEM START MERGES;");
     String query5 = fmt::format("RENAME TABLE {0} TO {1};", name, old_name);
     String query6 = fmt::format("RENAME TABLE {0} TO {1};", new_name, name);
     auto query_context = Context::createCopy(context);
+    
     executeQuery(query1, query_context, true);
     executeQuery(query2, query_context, true);
     executeQuery(query3, query_context, true);

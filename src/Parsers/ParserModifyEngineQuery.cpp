@@ -19,6 +19,7 @@ namespace DB
 
 bool ParserEngine::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
 {
+    ParserToken s_eq(TokenType::Equals);
     ParserKeyword s_partition_by("PARTITION BY");
     ParserKeyword s_primary_key("PRIMARY KEY");
     ParserKeyword s_order_by("ORDER BY");
@@ -41,6 +42,8 @@ bool ParserEngine::parseImpl(Pos & pos, ASTPtr & node, Expected & expected)
     ASTPtr settings;
 
     bool storage_like = false;
+
+    s_eq.ignore(pos, expected);
 
     if (!ident_with_optional_params_p.parse(pos, engine, expected))
         return false;
