@@ -14,7 +14,9 @@
 #include <Interpreters/executeQuery.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include <Parsers/ASTAssignment.h>
+#include "Core/Field.h"
 #include "Formats/FormatSettings.h"
+#include "IO/ReadBufferFromString.h"
 #include "IO/WriteBufferFromString.h"
 #include "Parsers/ASTCreateQuery.h"
 #include <Parsers/ASTIdentifier_fwd.h>
@@ -34,6 +36,8 @@
 #include <fmt/core.h>
 
 #include <algorithm>
+#include <sstream>
+#include <string>
 
 
 namespace DB
@@ -101,15 +105,35 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     String query1 = fmt::format("CREATE TABLE {0} AS {1} {2}", new_name, name, storage_formatted);
     String query2 = fmt::format("SYSTEM STOP MERGES;");
-    String query3 = fmt::format("ALTER TABLE {0} ATTACH PARTITION ID 'all' FROM {1};", new_name, name);
+    auto query_context = Context::createCopy(context);
+
+    executeQuery(query1, query_context, true);
+    executeQuery(query2, query_context, true);
+
+    //Get partition ids
+    WriteBufferFromOwnString buffer2;
+    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND active;", name);
+    ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
+    auto select_query_context = Context::createCopy(context);
+    select_query_context->makeQueryContext();
+    select_query_context->setCurrentQueryId("");
+
+    executeQuery(buffer3, buffer2, false, select_query_context, {});
+
+    std::stringstream partition_ids_string{buffer2.str()};
+    std::string line;
+
+    while (std::getline(partition_ids_string, line, '\n'))
+    {
+        String query3 = fmt::format("ALTER TABLE {0} ATTACH PARTITION ID '{1}' FROM {2};", new_name, line, name);
+        executeQuery(query3, query_context, true);
+    }
+
+    //Execute
     String query4 = fmt::format("SYSTEM START MERGES;");
     String query5 = fmt::format("RENAME TABLE {0} TO {1};", name, old_name);
     String query6 = fmt::format("RENAME TABLE {0} TO {1};", new_name, name);
-    auto query_context = Context::createCopy(context);
     
-    executeQuery(query1, query_context, true);
-    executeQuery(query2, query_context, true);
-    executeQuery(query3, query_context, true);
     executeQuery(query4, query_context, true);
     executeQuery(query5, query_context, true);
     executeQuery(query6, query_context, true);
