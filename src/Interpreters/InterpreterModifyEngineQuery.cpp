@@ -103,7 +103,11 @@ BlockIO InterpreterModifyEngineQuery::execute()
     storage.format(format_settings);
     String storage_formatted = buffer.str();
 
-    String query1 = fmt::format("CREATE TABLE {0} AS {1} {2}", new_name, name, storage_formatted);
+    String query1;
+    if (query.cluster.empty())
+        query1 = fmt::format("CREATE TABLE {0} AS {1} {2}", new_name, name, storage_formatted);
+    else
+        query1 = fmt::format("CREATE TABLE {0} ON CLUSTER '{1}' AS {2} {3}", new_name, query.cluster, name, storage_formatted);
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     auto query_context = Context::createCopy(context);
 
