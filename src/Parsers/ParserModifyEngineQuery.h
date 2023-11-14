@@ -8,19 +8,6 @@
 namespace DB
 {
 
-/**
-* [ENGINE = name] [PARTITION BY expr] [ORDER BY expr] [PRIMARY KEY expr] [SAMPLE BY expr] [SETTINGS name = value, ...]
-*/
-class ParserEngine : public IParserBase
-{
-public:
-    ParserEngine() = default;
-
-protected:
-    const char * getName() const override { return "storage definition"; }
-    bool parseImpl(Pos & pos, ASTPtr & node, Expected & expected) override;
-};
-
 /** Query like this:
   * ALTER TABLE [db.]name [ON CLUSTER cluster]
   *     [ADD COLUMN [IF NOT EXISTS] col_name type [AFTER col_after],]
