@@ -93,6 +93,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
     AddDefaultDatabaseVisitor visitor(getContext(), table_id.getDatabaseName());
     visitor.visit(query_ptr);
 
+    String database_name = (database) ? database->getDatabaseName() : "default";
     String name = query.getTable();
     String new_name = fmt::format("{0}_new", name);
     String old_name = fmt::format("{0}_old", name);
@@ -108,9 +109,9 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     String query1;
     if (query.cluster.empty())
-        query1 = fmt::format("CREATE TABLE {0} AS {1} {2}", new_name, name, storage_formatted);
+        query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, new_name, name, storage_formatted);
     else
-        query1 = fmt::format("CREATE TABLE {0} ON CLUSTER '{1}' AS {2} {3}", new_name, query.cluster, name, storage_formatted);
+        query1 = fmt::format("CREATE TABLE {0}.{1} ON CLUSTER '{2}' AS {0}.{3} {4}", database_name, new_name, query.cluster, name, storage_formatted);
 
     executeQuery(query1, query_context, true);
 
@@ -133,7 +134,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     //Stop merges
     String query2 = fmt::format("SYSTEM STOP MERGES;");
-    executeQuery(query2, query_context, true);String check_table_exists_query = fmt::format("SELECT name FROM system.tables WHERE name = '{0}';", new_name);
+    executeQuery(query2, query_context, true);
 
     //Get partition ids
     String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND active;", name);
@@ -150,19 +151,18 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     while (std::getline(partition_ids_string, line, '\n'))
     {
-        String query3 = fmt::format("ALTER TABLE {0} ATTACH PARTITION ID '{1}' FROM {2};", new_name, line, name);
+        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, new_name, line, name);
         executeQuery(query3, query_context, true);
     }
 
-    //Execute
     String query4 = fmt::format("SYSTEM START MERGES;");
+    executeQuery(query4, query_context, true);
 
     //RENAME ON CLUSTER???
     
-    String query5 = fmt::format("RENAME TABLE {0} TO {1};", name, old_name);
-    String query6 = fmt::format("RENAME TABLE {0} TO {1};", new_name, name);
+    String query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, name, old_name);
+    String query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, new_name, name);
     
-    executeQuery(query4, query_context, true);
     executeQuery(query5, query_context, true);
     executeQuery(query6, query_context, true);
 
