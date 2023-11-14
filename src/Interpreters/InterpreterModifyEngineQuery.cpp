@@ -39,6 +39,9 @@
 #include <sstream>
 #include <string>
 
+#include <chrono>
+#include <thread>
+
 
 namespace DB
 {
@@ -85,13 +88,10 @@ BlockIO InterpreterModifyEngineQuery::execute()
     if (table->isStaticStorage())
         throw Exception(ErrorCodes::TABLE_IS_READ_ONLY, "Table is read-only");
     auto table_lock = table->lockForShare(getContext()->getCurrentQueryId(), getContext()->getSettingsRef().lock_acquire_timeout);
-    auto metadata_snapshot = table->getInMemoryMetadataPtr();
 
     /// Add default database to table identifiers that we can encounter in e.g. default expressions, mutation expression, etc.
     AddDefaultDatabaseVisitor visitor(getContext(), table_id.getDatabaseName());
     visitor.visit(query_ptr);
-
-    auto alter_lock = table->lockForAlter(getContext()->getSettingsRef().lock_acquire_timeout);
 
     String name = query.getTable();
     String new_name = fmt::format("{0}_new", name);
@@ -103,26 +103,47 @@ BlockIO InterpreterModifyEngineQuery::execute()
     storage.format(format_settings);
     String storage_formatted = buffer.str();
 
+    //Start queries
+    auto query_context = Context::createCopy(context);
+
     String query1;
     if (query.cluster.empty())
         query1 = fmt::format("CREATE TABLE {0} AS {1} {2}", new_name, name, storage_formatted);
     else
         query1 = fmt::format("CREATE TABLE {0} ON CLUSTER '{1}' AS {2} {3}", new_name, query.cluster, name, storage_formatted);
-    String query2 = fmt::format("SYSTEM STOP MERGES;");
-    auto query_context = Context::createCopy(context);
 
     executeQuery(query1, query_context, true);
-    executeQuery(query2, query_context, true);
+
+    //Wait until table is created
+    auto select_query_context1 = Context::createCopy(context);
+    select_query_context1->makeQueryContext();
+    select_query_context1->setCurrentQueryId("");
+
+
+    std::chrono::milliseconds sleep_time_ms(50);
+    while (true)
+    {
+        String check_table_exists_query = fmt::format("SELECT name FROM system.tables WHERE name = '{0}';", new_name);
+        ReadBufferFromOwnString buffer_read(std::move(check_table_exists_query));
+        WriteBufferFromOwnString buffer_write;
+        executeQuery(buffer_read, buffer_write, false, select_query_context1, {});
+        if (!buffer_write.str().empty()) break;
+        std::this_thread::sleep_for(sleep_time_ms);
+    }
+
+    //Stop merges
+    String query2 = fmt::format("SYSTEM STOP MERGES;");
+    executeQuery(query2, query_context, true);String check_table_exists_query = fmt::format("SELECT name FROM system.tables WHERE name = '{0}';", new_name);
 
     //Get partition ids
-    WriteBufferFromOwnString buffer2;
     String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND active;", name);
+    WriteBufferFromOwnString buffer2;
     ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
-    auto select_query_context = Context::createCopy(context);
-    select_query_context->makeQueryContext();
-    select_query_context->setCurrentQueryId("");
+    auto select_query_context2 = Context::createCopy(context);
+    select_query_context2->makeQueryContext();
+    select_query_context2->setCurrentQueryId("");
 
-    executeQuery(buffer3, buffer2, false, select_query_context, {});
+    executeQuery(buffer3, buffer2, false, select_query_context2, {});
 
     std::stringstream partition_ids_string{buffer2.str()};
     std::string line;
@@ -135,6 +156,9 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     //Execute
     String query4 = fmt::format("SYSTEM START MERGES;");
+
+    //RENAME ON CLUSTER???
+    
     String query5 = fmt::format("RENAME TABLE {0} TO {1};", name, old_name);
     String query6 = fmt::format("RENAME TABLE {0} TO {1};", new_name, name);
     
