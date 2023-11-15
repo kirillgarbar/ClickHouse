@@ -1,41 +1,25 @@
 #include <Interpreters/InterpreterModifyEngineQuery.h>
 
-#include <Access/Common/AccessRightsElement.h>
 #include <Databases/DatabaseFactory.h>
 #include <Databases/DatabaseReplicated.h>
 #include <Databases/IDatabase.h>
 #include <Interpreters/AddDefaultDatabaseVisitor.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/FunctionNameNormalizer.h>
-#include <Interpreters/MutationsInterpreter.h>
-#include <Interpreters/MutationsNonDeterministicHelpers.h>
 #include <Interpreters/QueryLog.h>
-#include <Interpreters/executeDDLQueryOnCluster.h>
 #include <Interpreters/executeQuery.h>
 #include <Parsers/ASTModifyEngineQuery.h>
-#include <Parsers/ASTAssignment.h>
-#include "Core/Field.h"
-#include "Formats/FormatSettings.h"
 #include "IO/ReadBufferFromString.h"
 #include "IO/WriteBufferFromString.h"
 #include "Parsers/ASTCreateQuery.h"
 #include <Parsers/ASTIdentifier_fwd.h>
 #include <Parsers/ASTColumnDeclaration.h>
 #include <Parsers/queryToString.h>
-#include <Storages/AlterCommands.h>
 #include <Storages/IStorage.h>
-#include <Storages/MutationCommands.h>
-#include <Storages/PartitionCommands.h>
-#include <Storages/StorageKeeperMap.h>
 #include <Common/typeid_cast.h>
 
-#include <Functions/UserDefined/UserDefinedSQLFunctionFactory.h>
-#include <Functions/UserDefined/UserDefinedSQLFunctionVisitor.h>
-
-#include <boost/range/algorithm_ext/push_back.hpp>
 #include <fmt/core.h>
 
-#include <algorithm>
 #include <sstream>
 #include <string>
 
@@ -68,76 +52,62 @@ BlockIO InterpreterModifyEngineQuery::execute()
     const auto & query = query_ptr->as<ASTModifyEngineQuery &>();
     const auto & storage = query.storage->as<ASTStorage &>();
 
-    BlockIO res;
-
-    if (!UserDefinedSQLFunctionFactory::instance().empty())
-        UserDefinedSQLFunctionVisitor::visit(query_ptr);
-
     auto table_id = getContext()->resolveStorageID(query, Context::ResolveOrdinary);
     query_ptr->as<ASTModifyEngineQuery &>().setDatabase(table_id.database_name);
     StoragePtr table = DatabaseCatalog::instance().tryGetTable(table_id, getContext());
-
-    //getContext()->checkAccess(getRequiredAccess());
-
     DatabasePtr database = DatabaseCatalog::instance().getDatabase(table_id.database_name);
+
+    //TODO: Check access rights
 
     if (!table)
         throw Exception(ErrorCodes::UNKNOWN_TABLE, "Could not find table: {}", table_id.table_name);
-
-    checkStorageSupportsTransactionsIfNeeded(table, getContext());
-    if (table->isStaticStorage())
-        throw Exception(ErrorCodes::TABLE_IS_READ_ONLY, "Table is read-only");
-    auto table_lock = table->lockForShare(getContext()->getCurrentQueryId(), getContext()->getSettingsRef().lock_acquire_timeout);
 
     /// Add default database to table identifiers that we can encounter in e.g. default expressions, mutation expression, etc.
     AddDefaultDatabaseVisitor visitor(getContext(), table_id.getDatabaseName());
     visitor.visit(query_ptr);
 
+    //Entity names
     String database_name = (database) ? database->getDatabaseName() : "default";
-    String name = query.getTable();
-    String new_name = fmt::format("{0}_new", name);
-    String old_name = fmt::format("{0}_old", name);
-    String engine_name = storage.engine->name;
+    String table_name = query.getTable();
+    String table_name_new = fmt::format("{0}_new", table_name);
+    String table_name_old = fmt::format("{0}_old", table_name);
 
-    WriteBufferFromOwnString buffer;
-    IAST::FormatSettings format_settings{buffer, true};
-    storage.format(format_settings);
-    String storage_formatted = buffer.str();
-
-    //Start queries
     auto query_context = Context::createCopy(context);
 
-    String query1;
+    //Create table
+    String storage_string = queryToString(storage);
     if (query.cluster.empty())
-        query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, new_name, name, storage_formatted);
-    else
-        query1 = fmt::format("CREATE TABLE {0}.{1} ON CLUSTER '{2}' AS {0}.{3} {4}", database_name, new_name, query.cluster, name, storage_formatted);
-
-    executeQuery(query1, query_context, true);
-
-    //Wait until table is created
-    auto select_query_context1 = Context::createCopy(context);
-    select_query_context1->makeQueryContext();
-    select_query_context1->setCurrentQueryId("");
-
-
-    std::chrono::milliseconds sleep_time_ms(50);
-    while (true)
     {
-        String check_table_exists_query = fmt::format("SELECT name FROM system.tables WHERE name = '{0}';", new_name);
-        ReadBufferFromOwnString buffer_read(std::move(check_table_exists_query));
-        WriteBufferFromOwnString buffer_write;
-        executeQuery(buffer_read, buffer_write, false, select_query_context1, {});
-        if (!buffer_write.str().empty()) break;
-        std::this_thread::sleep_for(sleep_time_ms);
+        String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
+        executeQuery(query1, query_context, true);
+    }
+    else
+    {
+        String query1 = fmt::format("CREATE TABLE {0}.{1} ON CLUSTER '{2}' AS {0}.{3} {4}", database_name, table_name_new, query.cluster, table_name, storage_string);
+        executeQuery(query1, query_context, true);
+        //Wait until table is created
+        auto select_query_context1 = Context::createCopy(context);
+        select_query_context1->makeQueryContext();
+        select_query_context1->setCurrentQueryId("");
+
+        String check_table_exists_query = fmt::format("SELECT name FROM system.tables WHERE name = '{0}';", table_name_new);
+        std::chrono::milliseconds sleep_time_ms(50);
+        //TODO: timeout instead of while(true)
+        while (true)
+        {
+            ReadBufferFromString buffer_read(check_table_exists_query);
+            WriteBufferFromOwnString buffer_write;
+            executeQuery(buffer_read, buffer_write, false, select_query_context1, {});
+            if (!buffer_write.str().empty()) break;
+            std::this_thread::sleep_for(sleep_time_ms);
+        }
     }
 
-    //Stop merges
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     executeQuery(query2, query_context, true);
 
     //Get partition ids
-    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND active;", name);
+    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND active;", table_name);
     WriteBufferFromOwnString buffer2;
     ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
     auto select_query_context2 = Context::createCopy(context);
@@ -149,22 +119,25 @@ BlockIO InterpreterModifyEngineQuery::execute()
     std::stringstream partition_ids_string{buffer2.str()};
     std::string line;
 
+    //Attach partitions
     while (std::getline(partition_ids_string, line, '\n'))
     {
-        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, new_name, line, name);
+        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name_new, line, table_name);
         executeQuery(query3, query_context, true);
     }
 
     String query4 = fmt::format("SYSTEM START MERGES;");
     executeQuery(query4, query_context, true);
 
-    //RENAME ON CLUSTER???
-    
-    String query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, name, old_name);
-    String query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, new_name, name);
+    //Rename tables
+    //TODO: Rename on cluster?
+    String query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
+    String query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
     
     executeQuery(query5, query_context, true);
     executeQuery(query6, query_context, true);
+
+    BlockIO res;
 
     return res;
 }
