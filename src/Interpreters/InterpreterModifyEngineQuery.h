@@ -18,13 +18,9 @@ public:
 
     BlockIO execute() override;
 
-    //static AccessRightsElements getRequiredAccessForCommand(const ASTAlterCommand & command, const String & database, const String & table);
-
     bool supportsTransactions() const override { return true; }
 
 private:
-    //AccessRightsElements getRequiredAccess() const;
-
     ASTPtr query_ptr;
 };
 

@@ -14,7 +14,7 @@ namespace ErrorCodes
 /** Get the text that identifies this element. */
 String ASTModifyEngineQuery::getID(char delim) const
 {
-    return "AlterQuery" + (delim + getDatabase()) + delim + getTable();
+    return "ModifyEngineQuery" + (delim + getDatabase()) + delim + getTable();
 }
 
 ASTPtr ASTModifyEngineQuery::clone() const
@@ -52,8 +52,9 @@ void ASTModifyEngineQuery::formatQueryImpl(const FormatSettings & settings, Form
 
     formatOnCluster(settings);
 
-    settings.ostr << (settings.hilite ? hilite_keyword : "") << "MODIFY ENGINE " 
+    settings.ostr << (settings.hilite ? hilite_keyword : "") << " MODIFY " 
     << (settings.hilite ? hilite_none : "");
+    
     storage->formatImpl(settings, state, frame);
 }
 

@@ -19,7 +19,7 @@ public:
 
     ASTPtr clone() const override;
 
-    QueryKind getQueryKind() const override { return QueryKind::Alter; }
+    QueryKind getQueryKind() const override { return QueryKind::Create; }
 
     ASTPtr getRewrittenASTWithoutOnCluster(const WithoutOnClusterASTRewriteParams & params) const override
     {
