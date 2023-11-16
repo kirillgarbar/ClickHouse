@@ -130,10 +130,17 @@ BlockIO InterpreterModifyEngineQuery::execute()
     executeQuery(query4, query_context, true);
 
     //Rename tables
-    //TODO: Rename on cluster?
-    String query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
-    String query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
-    
+    String query5, query6;
+    if (query.cluster.empty())
+    {   
+        query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
+        query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
+    }
+    else 
+    {
+        query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2} ON CLUSTER {3};", database_name, table_name, table_name_old, query.cluster);
+        query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2} ON CLUSTER {3};", database_name, table_name_new, table_name, query.cluster);
+    }
     executeQuery(query5, query_context, true);
     executeQuery(query6, query_context, true);
 
