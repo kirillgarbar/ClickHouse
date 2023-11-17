@@ -8,6 +8,7 @@
 #include <Interpreters/FunctionNameNormalizer.h>
 #include <Interpreters/QueryLog.h>
 #include <Interpreters/executeQuery.h>
+#include <Interpreters/InterpreterModifyEngineCreateQuery.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include "IO/ReadBufferFromString.h"
 #include "IO/WriteBufferFromString.h"
@@ -15,11 +16,15 @@
 #include <Parsers/ASTIdentifier_fwd.h>
 #include <Parsers/ASTColumnDeclaration.h>
 #include <Parsers/queryToString.h>
+#include <Parsers/parseQuery.h>
+#include <Parsers/ParserCreateQuery.h>
 #include <Storages/IStorage.h>
+#include "Common/Exception.h"
 #include <Common/typeid_cast.h>
 
 #include <fmt/core.h>
 
+#include <memory>
 #include <sstream>
 #include <string>
 
@@ -79,7 +84,10 @@ BlockIO InterpreterModifyEngineQuery::execute()
     if (query.cluster.empty())
     {
         String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
-        executeQuery(query1, query_context, true);
+        ParserCreateQuery p_create_query;
+        auto parsed_query = parseQuery(p_create_query, query1, "", 0, 0);
+        auto interpreter_create_query = std::make_unique<InterpreterModifyEngineCreateQuery>(parsed_query, query_context);
+        interpreter_create_query->execute();
     }
     else
     {
