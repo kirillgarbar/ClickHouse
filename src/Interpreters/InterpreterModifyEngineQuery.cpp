@@ -74,6 +74,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
     //Entity names
     String database_name = (database) ? database->getDatabaseName() : "default";
     String table_name = query.getTable();
+    //TODO: Make sure name is unique
     String table_name_new = fmt::format("{0}_new", table_name);
     String table_name_old = fmt::format("{0}_old", table_name);
 
@@ -87,8 +88,8 @@ BlockIO InterpreterModifyEngineQuery::execute()
     String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
     ParserCreateQuery p_create_query;
     auto parsed_query = parseQuery(p_create_query, query1, "", 0, 0);
-    auto interpreter_create_query = std::make_unique<TableEngineModifier>(parsed_query, query_context);
-    interpreter_create_query->execute(ddl_guard);
+    auto interpreter_create_query = std::make_unique<TableEngineModifier>();
+    interpreter_create_query->createTable(parsed_query, query_context);
 
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     executeQuery(query2, query_context, true);

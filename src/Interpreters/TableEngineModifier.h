@@ -4,10 +4,12 @@
 #include <Core/SettingsEnums.h>
 #include <Access/Common/AccessRightsElement.h>
 #include <Interpreters/IInterpreter.h>
+#include <Interpreters/InterpreterRenameQuery.h>
 #include <Storages/ColumnsDescription.h>
 #include <Storages/ConstraintsDescription.h>
 #include <Storages/IStorage_fwd.h>
 #include <Storages/StorageInMemoryMetadata.h>
+#include "Parsers/IAST_fwd.h"
 
 
 namespace DB
@@ -26,43 +28,13 @@ using DDLGuardPtr = std::unique_ptr<DDLGuard>;
 /** Allows to create new table or database,
   *  or create an object for existing table or database.
   */
-class TableEngineModifier : public WithMutableContext
+class TableEngineModifier
 {
 public:
-    TableEngineModifier(const ASTPtr & query_ptr_, ContextMutablePtr context_);
+    TableEngineModifier() = default;
 
-    void createTable(DDLGuardPtr & ddl_guard);
-
-    /// List of columns and their types in AST.
-    static ASTPtr formatColumns(const ColumnsDescription & columns);
-    static ASTPtr formatIndices(const IndicesDescription & indices);
-    static ASTPtr formatConstraints(const ConstraintsDescription & constraints);
-    static ASTPtr formatProjections(const ProjectionsDescription & projections);
-
-    void setForceRestoreData(bool has_force_restore_data_flag_)
-    {
-        has_force_restore_data_flag = has_force_restore_data_flag_;
-    }
-
-    void setInternal(bool internal_)
-    {
-        internal = internal_;
-    }
-
-    void setForceAttach(bool force_attach_)
-    {
-        force_attach = force_attach_;
-    }
-
-    void setLoadDatabaseWithoutTables(bool load_database_without_tables_)
-    {
-        load_database_without_tables = load_database_without_tables_;
-    }
-
-    void setDontNeedDDLGuard()
-    {
-        need_ddl_guard = false;
-    }
+    void createTable(ASTPtr & query_ptr, ContextMutablePtr context);
+    void renameTable(ASTPtr & query_ptr, ContextMutablePtr context);
 
 private:
     struct TableProperties
@@ -73,24 +45,22 @@ private:
         ProjectionsDescription projections;
     };
 
+    /// List of columns and their types in AST.
+    static ASTPtr formatColumns(const ColumnsDescription & columns);
+    static ASTPtr formatIndices(const IndicesDescription & indices);
+    static ASTPtr formatConstraints(const ConstraintsDescription & constraints);
+    static ASTPtr formatProjections(const ProjectionsDescription & projections);
+
     /// Calculate list of columns, constraints, indices, etc... of table. Rewrite query in canonical way.
-    TableProperties getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create) const;
+    TableProperties getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create, ContextMutablePtr context) const;
 
     /// Create IStorage and add it to database. If table already exists and IF NOT EXISTS specified, do nothing and return false.
-    bool doCreateTable(ASTCreateQuery & create, const TableProperties & properties, DDLGuardPtr & ddl_guard);
-    BlockIO doCreateOrReplaceTable(ASTCreateQuery & create, const TableEngineModifier::TableProperties & properties);
+    bool doCreateTable(ASTPtr & query_ptr, const TableProperties & properties, ContextMutablePtr context);
 
-    void assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database) const;
+    void assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database, ContextMutablePtr context) const;
 
-    ASTPtr query_ptr;
-
-    /// Skip safety threshold when loading tables.
-    bool has_force_restore_data_flag = false;
     /// Is this an internal query - not from the user.
-    bool internal = false;
-    bool force_attach = false;
-    bool load_database_without_tables = false;
-    bool need_ddl_guard = true;
+    bool internal = true;
 
     mutable String as_database_saved;
     mutable String as_table_saved;
