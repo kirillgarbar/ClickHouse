@@ -312,38 +312,6 @@ void InterpreterModifyEngineCreateQuery::assertOrSetUUID(ASTCreateQuery & create
     }
 }
 
-
-BlockIO InterpreterModifyEngineCreateQuery::createTable(ASTCreateQuery & create)
-{
-    String current_database = getContext()->getCurrentDatabase();
-    auto database_name = create.database ? create.getDatabase() : current_database;
-
-    DDLGuardPtr ddl_guard;
-
-    if (!create.temporary && !create.database)
-        create.setDatabase(current_database);
-
-    /// Set and retrieve list of columns, indices and constraints. Set table engine if needed. Rewrite query in canonical way.
-    TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create);
-
-    DatabasePtr database;
-    bool need_add_to_database = !create.temporary;
-    if (need_add_to_database)
-        database = DatabaseCatalog::instance().getDatabase(database_name);
-
-    /// Actually creates table
-    doCreateTable(create, properties, ddl_guard);
-    ddl_guard.reset();
-
-    /// If table has dependencies - add them to the graph
-    QualifiedTableName qualified_name{database_name, create.getTable()};
-    auto ref_dependencies = getDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
-    auto loading_dependencies = getLoadingDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
-    DatabaseCatalog::instance().addDependencies(qualified_name, ref_dependencies, loading_dependencies);
-
-    return {};
-}
-
 bool InterpreterModifyEngineCreateQuery::doCreateTable(ASTCreateQuery & create,
                                            const InterpreterModifyEngineCreateQuery::TableProperties & properties,
                                            DDLGuardPtr & ddl_guard)
@@ -364,7 +332,7 @@ bool InterpreterModifyEngineCreateQuery::doCreateTable(ASTCreateQuery & create,
         throw Exception(ErrorCodes::TABLE_ALREADY_EXISTS,
             "{} {}.{} already exists", "Table", backQuoteIfNeed(create.getDatabase()), backQuoteIfNeed(create.getTable()));
     }
-    else if (!create.attach)
+    else
     {
         /// Checking that table may exists in detached/detached permanently state
         try
@@ -380,8 +348,8 @@ bool InterpreterModifyEngineCreateQuery::doCreateTable(ASTCreateQuery & create,
     data_path = database->getTableDataPath(create);
     auto full_data_path = fs::path{getContext()->getPath()} / data_path;
 
-    //DELETE
-    if (!create.attach && !data_path.empty() && fs::exists(full_data_path))
+    //DELETE?
+    if (!data_path.empty() && fs::exists(full_data_path))
     {
         if (getContext()->getZooKeeperMetadataTransaction() &&
             !getContext()->getZooKeeperMetadataTransaction()->isInitialQuery() &&
@@ -435,11 +403,30 @@ bool InterpreterModifyEngineCreateQuery::doCreateTable(ASTCreateQuery & create,
 }
 
 
-BlockIO InterpreterModifyEngineCreateQuery::execute()
+BlockIO InterpreterModifyEngineCreateQuery::execute(DDLGuardPtr & ddl_guard)
 {
     auto & create = query_ptr->as<ASTCreateQuery &>();
 
-    return createTable(create);
+    String current_database = getContext()->getCurrentDatabase();
+    auto database_name = create.database ? create.getDatabase() : current_database;
+    DatabasePtr database = DatabaseCatalog::instance().getDatabase(database_name);
+
+    if (!create.temporary && !create.database)
+        create.setDatabase(current_database);
+
+    /// Set and retrieve list of columns, indices and constraints. Set table engine if needed. Rewrite query in canonical way.
+    TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create);
+
+    /// Actually creates table
+    doCreateTable(create, properties, ddl_guard);
+
+    /// If table has dependencies - add them to the graph
+    QualifiedTableName qualified_name{database_name, create.getTable()};
+    auto ref_dependencies = getDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
+    auto loading_dependencies = getLoadingDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
+    DatabaseCatalog::instance().addDependencies(qualified_name, ref_dependencies, loading_dependencies);
+
+    return {};
 }
 
 }

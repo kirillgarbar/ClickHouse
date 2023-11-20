@@ -79,6 +79,8 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     auto query_context = Context::createCopy(context);
 
+    DDLGuardPtr ddl_guard;
+
     //Create table
     String storage_string = queryToString(storage);
     if (query.cluster.empty())
@@ -87,7 +89,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
         ParserCreateQuery p_create_query;
         auto parsed_query = parseQuery(p_create_query, query1, "", 0, 0);
         auto interpreter_create_query = std::make_unique<InterpreterModifyEngineCreateQuery>(parsed_query, query_context);
-        interpreter_create_query->execute();
+        interpreter_create_query->execute(ddl_guard);
     }
     else
     {
@@ -111,6 +113,8 @@ BlockIO InterpreterModifyEngineQuery::execute()
         }
     }
 
+    ddl_guard.reset();
+    
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     executeQuery(query2, query_context, true);
 

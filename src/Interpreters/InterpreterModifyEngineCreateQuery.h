@@ -26,12 +26,12 @@ using DDLGuardPtr = std::unique_ptr<DDLGuard>;
 /** Allows to create new table or database,
   *  or create an object for existing table or database.
   */
-class InterpreterModifyEngineCreateQuery : public IInterpreter, WithMutableContext
+class InterpreterModifyEngineCreateQuery : public WithMutableContext
 {
 public:
     InterpreterModifyEngineCreateQuery(const ASTPtr & query_ptr_, ContextMutablePtr context_);
 
-    BlockIO execute() override;
+    BlockIO execute(DDLGuardPtr & ddl_guard);
 
     /// List of columns and their types in AST.
     static ASTPtr formatColumns(const ColumnsDescription & columns);
@@ -72,8 +72,6 @@ private:
         ConstraintsDescription constraints;
         ProjectionsDescription projections;
     };
-
-    BlockIO createTable(ASTCreateQuery & create);
 
     /// Calculate list of columns, constraints, indices, etc... of table. Rewrite query in canonical way.
     TableProperties getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create) const;
