@@ -10,9 +10,11 @@
 #include <Interpreters/executeQuery.h>
 #include <Interpreters/TableEngineModifier.h>
 #include <Parsers/ASTModifyEngineQuery.h>
+#include "Access/Common/AuthenticationType.h"
 #include "IO/ReadBufferFromString.h"
 #include "IO/WriteBufferFromString.h"
 #include "Parsers/ASTCreateQuery.h"
+#include "Parsers/ParserRenameQuery.h"
 #include <Parsers/ASTIdentifier_fwd.h>
 #include <Parsers/ASTColumnDeclaration.h>
 #include <Parsers/queryToString.h>
@@ -88,8 +90,8 @@ BlockIO InterpreterModifyEngineQuery::execute()
     String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
     ParserCreateQuery p_create_query;
     auto parsed_query = parseQuery(p_create_query, query1, "", 0, 0);
-    auto interpreter_create_query = std::make_unique<TableEngineModifier>();
-    interpreter_create_query->createTable(parsed_query, query_context);
+    auto engine_modifier = std::make_unique<TableEngineModifier>();
+    engine_modifier->createTable(parsed_query, query_context);
 
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     executeQuery(query2, query_context, true);
@@ -121,11 +123,13 @@ BlockIO InterpreterModifyEngineQuery::execute()
     ddl_guard_new.reset();
 
     //Rename tables
-    String query5, query6;
-    query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
-    query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
-    executeQuery(query5, query_context, true);
-    executeQuery(query6, query_context, true);
+    ParserRenameQuery p_rename_query;
+    String rename_query_old = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
+    String rename_query_new = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
+    auto parsed_rename_query_old = parseQuery(p_rename_query, rename_query_old, "", 0, 0);
+    auto parsed_rename_query_new = parseQuery(p_rename_query, rename_query_new, "", 0, 0);
+    engine_modifier->renameTable(parsed_rename_query_old, query_context);
+    engine_modifier->renameTable(parsed_rename_query_new, query_context);
 
     BlockIO res;
 
