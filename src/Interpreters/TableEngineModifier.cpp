@@ -296,15 +296,13 @@ bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
 
     auto & create = query_ptr->as<ASTCreateQuery &>();
 
-    // if (!ddl_guard && likely(need_ddl_guard))
-    //     ddl_guard = DatabaseCatalog::instance().getDDLGuard(create.getDatabase(), create.getTable());
-
     String data_path;
     DatabasePtr database;
 
     database = DatabaseCatalog::instance().getDatabase(create.getDatabase());
     assertOrSetUUID(create, database, context);
 
+    /// DELETE?
     /// Table can be created before or it can be created concurrently in another thread, while we were waiting in DDLGuard.
     if (database->isTableExist(create.getTable(), context))
     {
@@ -420,26 +418,12 @@ void TableEngineModifier::renameTable(ASTPtr & query_ptr, ContextMutablePtr cont
     RenameDescriptions descriptions;
     descriptions.reserve(rename.elements.size());
 
-    /// Don't allow to drop tables (that we are renaming); don't allow to create tables in places where tables will be renamed.
-    TableGuards table_guards;
-
     for (const auto & elem : rename.elements)
     {
         descriptions.emplace_back(elem, current_database);
-        const auto & description = descriptions.back();
-
-        UniqueTableName from(description.from_database_name, description.from_table_name);
-        UniqueTableName to(description.to_database_name, description.to_table_name);
-
-        table_guards[from];
-        table_guards[to];
     }
 
     auto & database_catalog = DatabaseCatalog::instance();
-
-    /// Must do it in consistent order.
-    for (auto & table_guard : table_guards)
-        table_guard.second = database_catalog.getDDLGuard(table_guard.first.database_name, table_guard.first.table_name);
 
     assert(!rename.rename_if_cannot_exchange || descriptions.size() == 1);
     assert(!(rename.rename_if_cannot_exchange && rename.exchange));

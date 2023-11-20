@@ -84,6 +84,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     DDLGuardPtr ddl_guard = DatabaseCatalog::instance().getDDLGuard(database_name, table_name);
     DDLGuardPtr ddl_guard_new = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_new);
+    DDLGuardPtr ddl_guard_old = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_old);
 
     //Create table
     String storage_string = queryToString(storage);
@@ -119,9 +120,6 @@ BlockIO InterpreterModifyEngineQuery::execute()
     String query4 = fmt::format("SYSTEM START MERGES;");
     executeQuery(query4, query_context, true);
 
-    ddl_guard.reset();
-    ddl_guard_new.reset();
-
     //Rename tables
     ParserRenameQuery p_rename_query;
     String rename_query_old = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
@@ -130,6 +128,10 @@ BlockIO InterpreterModifyEngineQuery::execute()
     auto parsed_rename_query_new = parseQuery(p_rename_query, rename_query_new, "", 0, 0);
     engine_modifier->renameTable(parsed_rename_query_old, query_context);
     engine_modifier->renameTable(parsed_rename_query_new, query_context);
+
+    ddl_guard.reset();
+    ddl_guard_new.reset();
+    ddl_guard_old.reset();
 
     BlockIO res;
 
