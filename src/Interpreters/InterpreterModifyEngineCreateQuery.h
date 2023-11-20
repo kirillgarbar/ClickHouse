@@ -34,8 +34,6 @@ public:
     BlockIO execute() override;
 
     /// List of columns and their types in AST.
-    static ASTPtr formatColumns(const NamesAndTypesList & columns);
-    static ASTPtr formatColumns(const NamesAndTypesList & columns, const NamesAndAliases & alias_columns);
     static ASTPtr formatColumns(const ColumnsDescription & columns);
     static ASTPtr formatIndices(const IndicesDescription & indices);
     static ASTPtr formatConstraints(const ConstraintsDescription & constraints);
@@ -66,11 +64,6 @@ public:
         need_ddl_guard = false;
     }
 
-    /// Obtain information about columns, their types, default values and column comments,
-    ///  for case when columns in CREATE query is specified explicitly.
-    static ColumnsDescription getColumnsDescription(const ASTExpressionList & columns, ContextPtr context, bool attach);
-    static ConstraintsDescription getConstraintsDescription(const ASTExpressionList * constraints);
-
 private:
     struct TableProperties
     {
@@ -84,17 +77,12 @@ private:
 
     /// Calculate list of columns, constraints, indices, etc... of table. Rewrite query in canonical way.
     TableProperties getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create) const;
-    void setEngine(ASTCreateQuery & create) const;
 
     /// Create IStorage and add it to database. If table already exists and IF NOT EXISTS specified, do nothing and return false.
     bool doCreateTable(ASTCreateQuery & create, const TableProperties & properties, DDLGuardPtr & ddl_guard);
     BlockIO doCreateOrReplaceTable(ASTCreateQuery & create, const InterpreterModifyEngineCreateQuery::TableProperties & properties);
 
     void assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database) const;
-
-    /// Update create query with columns description from storage if query doesn't have it.
-    /// It's used to prevent automatic schema inference while table creation on each server startup.
-    void addColumnsDescriptionToCreateQueryIfNecessary(ASTCreateQuery & create, const StoragePtr & storage);
 
     ASTPtr query_ptr;
 
