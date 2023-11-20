@@ -8,7 +8,7 @@
 #include <Interpreters/FunctionNameNormalizer.h>
 #include <Interpreters/QueryLog.h>
 #include <Interpreters/executeQuery.h>
-#include <Interpreters/InterpreterModifyEngineCreateQuery.h>
+#include <Interpreters/TableEngineModifier.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include "IO/ReadBufferFromString.h"
 #include "IO/WriteBufferFromString.h"
@@ -79,42 +79,17 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
     auto query_context = Context::createCopy(context);
 
-    DDLGuardPtr ddl_guard;
+    DDLGuardPtr ddl_guard = DatabaseCatalog::instance().getDDLGuard(database_name, table_name);
+    DDLGuardPtr ddl_guard_new = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_new);
 
     //Create table
     String storage_string = queryToString(storage);
-    if (query.cluster.empty())
-    {
-        String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
-        ParserCreateQuery p_create_query;
-        auto parsed_query = parseQuery(p_create_query, query1, "", 0, 0);
-        auto interpreter_create_query = std::make_unique<InterpreterModifyEngineCreateQuery>(parsed_query, query_context);
-        interpreter_create_query->execute(ddl_guard);
-    }
-    else
-    {
-        String query1 = fmt::format("CREATE TABLE {0}.{1} ON CLUSTER '{2}' AS {0}.{3} {4}", database_name, table_name_new, query.cluster, table_name, storage_string);
-        executeQuery(query1, query_context, true);
-        //Wait until table is created
-        auto select_query_context1 = Context::createCopy(context);
-        select_query_context1->makeQueryContext();
-        select_query_context1->setCurrentQueryId("");
+    String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
+    ParserCreateQuery p_create_query;
+    auto parsed_query = parseQuery(p_create_query, query1, "", 0, 0);
+    auto interpreter_create_query = std::make_unique<TableEngineModifier>(parsed_query, query_context);
+    interpreter_create_query->execute(ddl_guard);
 
-        String check_table_exists_query = fmt::format("SELECT name FROM system.tables WHERE name = '{0}';", table_name_new);
-        std::chrono::milliseconds sleep_time_ms(50);
-        //TODO: timeout instead of while(true)
-        while (true)
-        {
-            ReadBufferFromString buffer_read(check_table_exists_query);
-            WriteBufferFromOwnString buffer_write;
-            executeQuery(buffer_read, buffer_write, false, select_query_context1, {});
-            if (!buffer_write.str().empty()) break;
-            std::this_thread::sleep_for(sleep_time_ms);
-        }
-    }
-
-    ddl_guard.reset();
-    
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     executeQuery(query2, query_context, true);
 
@@ -141,18 +116,13 @@ BlockIO InterpreterModifyEngineQuery::execute()
     String query4 = fmt::format("SYSTEM START MERGES;");
     executeQuery(query4, query_context, true);
 
+    ddl_guard.reset();
+    ddl_guard_new.reset();
+
     //Rename tables
     String query5, query6;
-    if (query.cluster.empty())
-    {   
-        query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
-        query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
-    }
-    else 
-    {
-        query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2} ON CLUSTER {3};", database_name, table_name, table_name_old, query.cluster);
-        query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2} ON CLUSTER {3};", database_name, table_name_new, table_name, query.cluster);
-    }
+    query5 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
+    query6 = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
     executeQuery(query5, query_context, true);
     executeQuery(query6, query_context, true);
 

@@ -38,7 +38,7 @@
 #include <Interpreters/executeQuery.h>
 #include <Interpreters/DDLTask.h>
 #include <Interpreters/ExpressionAnalyzer.h>
-#include <Interpreters/InterpreterModifyEngineCreateQuery.h>
+#include <Interpreters/TableEngineModifier.h>
 #include <Interpreters/InterpreterSelectWithUnionQuery.h>
 #include <Interpreters/InterpreterSelectQueryAnalyzer.h>
 #include <Interpreters/InterpreterInsertQuery.h>
@@ -109,12 +109,12 @@ namespace ErrorCodes
 
 namespace fs = std::filesystem;
 
-InterpreterModifyEngineCreateQuery::InterpreterModifyEngineCreateQuery(const ASTPtr & query_ptr_, ContextMutablePtr context_)
+TableEngineModifier::TableEngineModifier(const ASTPtr & query_ptr_, ContextMutablePtr context_)
     : WithMutableContext(context_), query_ptr(query_ptr_)
 {
 }
 
-ASTPtr InterpreterModifyEngineCreateQuery::formatIndices(const IndicesDescription & indices)
+ASTPtr TableEngineModifier::formatIndices(const IndicesDescription & indices)
 {
     auto res = std::make_shared<ASTExpressionList>();
 
@@ -124,7 +124,7 @@ ASTPtr InterpreterModifyEngineCreateQuery::formatIndices(const IndicesDescriptio
     return res;
 }
 
-ASTPtr InterpreterModifyEngineCreateQuery::formatConstraints(const ConstraintsDescription & constraints)
+ASTPtr TableEngineModifier::formatConstraints(const ConstraintsDescription & constraints)
 {
     auto res = std::make_shared<ASTExpressionList>();
 
@@ -134,7 +134,7 @@ ASTPtr InterpreterModifyEngineCreateQuery::formatConstraints(const ConstraintsDe
     return res;
 }
 
-ASTPtr InterpreterModifyEngineCreateQuery::formatProjections(const ProjectionsDescription & projections)
+ASTPtr TableEngineModifier::formatProjections(const ProjectionsDescription & projections)
 {
     auto res = std::make_shared<ASTExpressionList>();
 
@@ -144,7 +144,7 @@ ASTPtr InterpreterModifyEngineCreateQuery::formatProjections(const ProjectionsDe
     return res;
 }
 
-ASTPtr InterpreterModifyEngineCreateQuery::formatColumns(const ColumnsDescription & columns)
+ASTPtr TableEngineModifier::formatColumns(const ColumnsDescription & columns)
 {
     auto columns_list = std::make_shared<ASTExpressionList>();
 
@@ -194,7 +194,7 @@ ASTPtr InterpreterModifyEngineCreateQuery::formatColumns(const ColumnsDescriptio
     return columns_list;
 }
 
-InterpreterModifyEngineCreateQuery::TableProperties InterpreterModifyEngineCreateQuery::getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create) const
+TableEngineModifier::TableProperties TableEngineModifier::getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create) const
 {
     /// We have to check access rights again (in case engine was changed).
     if (create.storage)
@@ -255,10 +255,9 @@ InterpreterModifyEngineCreateQuery::TableProperties InterpreterModifyEngineCreat
     return properties;
 }
 
-void InterpreterModifyEngineCreateQuery::assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database) const
+void TableEngineModifier::assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database) const
 {
     const auto * kind = "Table";
-    const auto * kind_upper = "TABLE";
 
     if (database->getEngineName() == "Replicated" && getContext()->getClientInfo().is_replicated_database_internal
         && !internal)
@@ -267,26 +266,8 @@ void InterpreterModifyEngineCreateQuery::assertOrSetUUID(ASTCreateQuery & create
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Table UUID is not specified in DDL log");
     }
 
-    bool from_path = create.attach_from_path.has_value();
-
     if (database->getUUID() != UUIDHelpers::Nil)
     {
-        if (create.attach && !from_path && create.uuid == UUIDHelpers::Nil)
-        {
-            throw Exception(ErrorCodes::INCORRECT_QUERY,
-                            "Incorrect ATTACH {} query for Atomic database engine. "
-                            "Use one of the following queries instead:\n"
-                            "1. ATTACH {} {};\n"
-                            "2. CREATE {} {} <table definition>;\n"
-                            "3. ATTACH {} {} FROM '/path/to/data/' <table definition>;\n"
-                            "4. ATTACH {} {} UUID '<uuid>' <table definition>;",
-                            kind_upper,
-                            kind_upper, create.table,
-                            kind_upper, create.table,
-                            kind_upper, create.table,
-                            kind_upper, create.table);
-        }
-
         create.generateRandomUUID();
     }
     else
@@ -312,13 +293,15 @@ void InterpreterModifyEngineCreateQuery::assertOrSetUUID(ASTCreateQuery & create
     }
 }
 
-bool InterpreterModifyEngineCreateQuery::doCreateTable(ASTCreateQuery & create,
-                                           const InterpreterModifyEngineCreateQuery::TableProperties & properties,
+bool TableEngineModifier::doCreateTable(ASTCreateQuery & create,
+                                           const TableEngineModifier::TableProperties & properties,
                                            DDLGuardPtr & ddl_guard)
 {
 
-    if (!ddl_guard && likely(need_ddl_guard))
-        ddl_guard = DatabaseCatalog::instance().getDDLGuard(create.getDatabase(), create.getTable());
+    if (ddl_guard) {}
+
+    // if (!ddl_guard && likely(need_ddl_guard))
+    //     ddl_guard = DatabaseCatalog::instance().getDDLGuard(create.getDatabase(), create.getTable());
 
     String data_path;
     DatabasePtr database;
@@ -362,7 +345,7 @@ bool InterpreterModifyEngineCreateQuery::doCreateTable(ASTCreateQuery & create,
             /// so the existing directory probably contains some leftovers from previous unsuccessful attempts to create the table
 
             fs::path trash_path = fs::path{getContext()->getPath()} / "trash" / data_path / getHexUIntLowercase(thread_local_rng());
-            LOG_WARNING(&Poco::Logger::get("InterpreterModifyEngineCreateQuery"), "Directory for {} data {} already exists. Will move it to {}",
+            LOG_WARNING(&Poco::Logger::get("TableEngineModifier"), "Directory for {} data {} already exists. Will move it to {}",
                         "table", String(data_path), trash_path);
             fs::create_directories(trash_path.parent_path());
             renameNoReplace(full_data_path, trash_path);
@@ -403,7 +386,7 @@ bool InterpreterModifyEngineCreateQuery::doCreateTable(ASTCreateQuery & create,
 }
 
 
-BlockIO InterpreterModifyEngineCreateQuery::execute(DDLGuardPtr & ddl_guard)
+void TableEngineModifier:createTable(DDLGuardPtr & ddl_guard)
 {
     auto & create = query_ptr->as<ASTCreateQuery &>();
 
@@ -425,8 +408,6 @@ BlockIO InterpreterModifyEngineCreateQuery::execute(DDLGuardPtr & ddl_guard)
     auto ref_dependencies = getDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
     auto loading_dependencies = getLoadingDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
     DatabaseCatalog::instance().addDependencies(qualified_name, ref_dependencies, loading_dependencies);
-
-    return {};
 }
 
 }

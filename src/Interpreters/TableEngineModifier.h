@@ -26,12 +26,12 @@ using DDLGuardPtr = std::unique_ptr<DDLGuard>;
 /** Allows to create new table or database,
   *  or create an object for existing table or database.
   */
-class InterpreterModifyEngineCreateQuery : public WithMutableContext
+class TableEngineModifier : public WithMutableContext
 {
 public:
-    InterpreterModifyEngineCreateQuery(const ASTPtr & query_ptr_, ContextMutablePtr context_);
+    TableEngineModifier(const ASTPtr & query_ptr_, ContextMutablePtr context_);
 
-    BlockIO execute(DDLGuardPtr & ddl_guard);
+    void createTable(DDLGuardPtr & ddl_guard);
 
     /// List of columns and their types in AST.
     static ASTPtr formatColumns(const ColumnsDescription & columns);
@@ -78,7 +78,7 @@ private:
 
     /// Create IStorage and add it to database. If table already exists and IF NOT EXISTS specified, do nothing and return false.
     bool doCreateTable(ASTCreateQuery & create, const TableProperties & properties, DDLGuardPtr & ddl_guard);
-    BlockIO doCreateOrReplaceTable(ASTCreateQuery & create, const InterpreterModifyEngineCreateQuery::TableProperties & properties);
+    BlockIO doCreateOrReplaceTable(ASTCreateQuery & create, const TableEngineModifier::TableProperties & properties);
 
     void assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database) const;
 
