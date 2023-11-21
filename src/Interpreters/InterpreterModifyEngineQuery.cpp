@@ -94,11 +94,21 @@ BlockIO InterpreterModifyEngineQuery::execute()
     auto engine_modifier = std::make_unique<TableEngineModifier>();
     engine_modifier->createTable(parsed_query, query_context);
 
+    //Rename tables
+    ParserRenameQuery p_rename_query;
+    String rename_query_old = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
+    String rename_query_new = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
+    auto parsed_rename_query_old = parseQuery(p_rename_query, rename_query_old, "", 0, 0);
+    auto parsed_rename_query_new = parseQuery(p_rename_query, rename_query_new, "", 0, 0);
+    engine_modifier->renameTable(parsed_rename_query_old, query_context);
+    engine_modifier->renameTable(parsed_rename_query_new, query_context);
+
+    /// Transfer data
     String query2 = fmt::format("SYSTEM STOP MERGES;");
     executeQuery(query2, query_context, true);
 
     //Get partition ids
-    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND active;", table_name);
+    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND active;", table_name_old);
     WriteBufferFromOwnString buffer2;
     ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
     auto select_query_context2 = Context::createCopy(context);
@@ -113,29 +123,18 @@ BlockIO InterpreterModifyEngineQuery::execute()
     //Attach partitions
     while (std::getline(partition_ids_string, line, '\n'))
     {
-        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name_new, line, table_name);
+        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name, line, table_name_old);
         executeQuery(query3, query_context, true);
     }
 
     String query4 = fmt::format("SYSTEM START MERGES;");
     executeQuery(query4, query_context, true);
 
-    //Rename tables
-    ParserRenameQuery p_rename_query;
-    String rename_query_old = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
-    String rename_query_new = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
-    auto parsed_rename_query_old = parseQuery(p_rename_query, rename_query_old, "", 0, 0);
-    auto parsed_rename_query_new = parseQuery(p_rename_query, rename_query_new, "", 0, 0);
-    engine_modifier->renameTable(parsed_rename_query_old, query_context);
-    engine_modifier->renameTable(parsed_rename_query_new, query_context);
-
     ddl_guard.reset();
     ddl_guard_new.reset();
     ddl_guard_old.reset();
 
-    BlockIO res;
-
-    return res;
+    return {};
 }
 
 }
