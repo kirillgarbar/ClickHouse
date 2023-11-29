@@ -36,6 +36,9 @@ public:
     void createTable(ASTPtr & query_ptr, ContextMutablePtr context);
     void renameTable(ASTPtr & query_ptr, ContextMutablePtr context);
 
+    /// On cluster
+    void prepareOnClusterQuery(ASTCreateQuery & create, ContextPtr context, const String & cluster_name);
+
 private:
     struct TableProperties
     {

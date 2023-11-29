@@ -10,6 +10,7 @@
 #include <Common/randomSeed.h>
 #include <Common/atomicRename.h>
 #include <Common/logger_useful.h>
+#include "Interpreters/Context_fwd.h"
 #include "Parsers/IAST_fwd.h"
 #include <base/hex.h>
 
@@ -83,6 +84,7 @@
 namespace DB
 {
 
+//TODO: Remove unused codes and includes
 namespace ErrorCodes
 {
     extern const int TABLE_ALREADY_EXISTS;
@@ -468,6 +470,56 @@ void TableEngineModifier::renameTable(ASTPtr & query_ptr, ContextMutablePtr cont
             DatabaseCatalog::instance().addDependencies(from_table_id, ref_dependencies, loading_dependencies);
             throw;
         }
+    }
+}
+
+void TableEngineModifier::prepareOnClusterQuery(ASTCreateQuery & create, ContextPtr local_context, const String & cluster_name)
+{
+    /// For CREATE query generate UUID on initiator, so it will be the same on all hosts.
+    /// It will be ignored if database does not support UUIDs.
+    create.generateRandomUUID();
+
+    /// For cross-replication cluster we cannot use UUID in replica path.
+    String cluster_name_expanded = local_context->getMacros()->expand(cluster_name);
+    ClusterPtr cluster = local_context->getCluster(cluster_name_expanded);
+
+    if (cluster->maybeCrossReplication())
+    {
+        auto on_cluster_version = local_context->getSettingsRef().distributed_ddl_entry_format_version;
+        if (DDLLogEntry::NORMALIZE_CREATE_ON_INITIATOR_VERSION <= on_cluster_version)
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Value {} of setting distributed_ddl_entry_format_version "
+                                                         "is incompatible with cross-replication", on_cluster_version);
+
+        /// Check that {uuid} macro is not used in zookeeper_path for ReplicatedMergeTree.
+        /// Otherwise replicas will generate different paths.
+        if (!create.storage)
+            return;
+        if (!create.storage->engine)
+            return;
+        if (!startsWith(create.storage->engine->name, "Replicated"))
+            return;
+
+        bool has_explicit_zk_path_arg = create.storage->engine->arguments &&
+                                        create.storage->engine->arguments->children.size() >= 2 &&
+                                        create.storage->engine->arguments->children[0]->as<ASTLiteral>() &&
+                                        create.storage->engine->arguments->children[0]->as<ASTLiteral>()->value.getType() == Field::Types::String;
+
+        if (has_explicit_zk_path_arg)
+        {
+            String zk_path = create.storage->engine->arguments->children[0]->as<ASTLiteral>()->value.get<String>();
+            Macros::MacroExpansionInfo info;
+            info.table_id.uuid = create.uuid;
+            info.ignore_unknown = true;
+            local_context->getMacros()->expand(zk_path, info);
+            if (!info.expanded_uuid)
+                return;
+        }
+
+        throw Exception(ErrorCodes::INCORRECT_QUERY,
+                        "Seems like cluster is configured for cross-replication, "
+                        "but zookeeper_path for ReplicatedMergeTree is not specified or contains {uuid} macro. "
+                        "It's not supported for cross replication, because tables must have different UUIDs. "
+                        "Please specify unique zookeeper_path explicitly.");
     }
 }
 }
