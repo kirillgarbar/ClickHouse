@@ -75,6 +75,13 @@ BlockIO InterpreterModifyEngineQuery::execute()
         if (!table)
             throw Exception(ErrorCodes::UNKNOWN_TABLE, "Could not find table: {}", table_id.table_name);
 
+        if (auto table_merge_tree = dynamic_pointer_cast<StorageMergeTree>(table))
+        {
+            auto unfinished_mutations = table_merge_tree->getUnfinishedMutationCommands();
+            if (!unfinished_mutations.empty())
+                throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited.");
+        }
+
         /// Add default database to table identifiers that we can encounter in e.g. default expressions, mutation expression, etc.
         AddDefaultDatabaseVisitor visitor(getContext(), table_id.getDatabaseName());
         visitor.visit(query_ptr);
@@ -101,6 +108,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
         engine_modifier->createTable(parsed_query, query_context);
 
         //Rename tables
+        //TODO: Atomic exchange
         ParserRenameQuery p_rename_query;
         String rename_query_old = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
         String rename_query_new = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
