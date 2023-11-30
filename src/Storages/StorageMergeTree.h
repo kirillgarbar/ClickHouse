@@ -119,6 +119,12 @@ public:
 
 private:
 
+    /// If true, the table is throwing on any user 
+    /// This flag is set only while modifying engine in TableEngineModifier
+    std::atomic_bool is_readonly {false};
+
+    void assertNotReadonly() const;
+
     /// Mutex and condvar for synchronous mutations wait
     std::mutex mutation_wait_mutex;
     std::condition_variable mutation_wait_event;
@@ -278,6 +284,8 @@ private:
     friend class MergeTreeData;
     friend class MergePlainMergeTreeTask;
     friend class MutatePlainMergeTreeTask;
+
+    friend class TableEngineModifier;
 
     struct DataValidationTasks : public IStorage::DataValidationTasksBase
     {

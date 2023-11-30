@@ -61,6 +61,7 @@ namespace ErrorCodes
     extern const int UNKNOWN_POLICY;
     extern const int NO_SUCH_DATA_PART;
     extern const int ABORTED;
+    extern const int TABLE_IS_READ_ONLY;
 }
 
 namespace ActionLocks
@@ -273,6 +274,7 @@ std::optional<UInt64> StorageMergeTree::totalBytes(const Settings &) const
 SinkToStoragePtr
 StorageMergeTree::write(const ASTPtr & /*query*/, const StorageMetadataPtr & metadata_snapshot, ContextPtr local_context, bool /*async_insert*/)
 {
+    assertNotReadonly();
     const auto & settings = local_context->getSettingsRef();
     return std::make_shared<MergeTreeSink>(
         *this, metadata_snapshot, settings.max_partitions_per_insert_block, local_context);
@@ -301,6 +303,8 @@ void StorageMergeTree::alter(
     ContextPtr local_context,
     AlterLockHolder & table_lock_holder)
 {
+    assertNotReadonly();
+
     if (local_context->getCurrentTransaction() && local_context->getSettingsRef().throw_on_unsupported_query_inside_transaction)
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "ALTER METADATA is not supported inside transactions");
 
@@ -781,6 +785,8 @@ std::vector<MergeTreeMutationStatus> StorageMergeTree::getMutationsStatus() cons
 
 CancellationCode StorageMergeTree::killMutation(const String & mutation_id)
 {
+    assertNotReadonly();
+    
     LOG_TRACE(log, "Killing mutation {}", mutation_id);
     UInt64 mutation_version = MergeTreeMutationEntry::tryParseFileName(mutation_id);
     if (!mutation_version)
@@ -1486,6 +1492,8 @@ bool StorageMergeTree::optimize(
     bool cleanup,
     ContextPtr local_context)
 {
+    assertNotReadonly();
+
     if (deduplicate)
     {
         if (deduplicate_by_columns.empty())
@@ -1628,6 +1636,7 @@ MergeTreeDataPartPtr StorageMergeTree::outdatePart(MergeTreeTransaction * txn, c
 
 void StorageMergeTree::dropPartNoWaitNoThrow(const String & part_name)
 {
+    assertNotReadonly();
     if (auto part = outdatePart(NO_TRANSACTION_RAW, part_name, /*force=*/ false, /*clear_without_timeout=*/ false))
     {
         if (deduplication_log)
@@ -1728,6 +1737,7 @@ void StorageMergeTree::renameAndCommitEmptyParts(MutableDataPartsVector & new_pa
 
 void StorageMergeTree::truncate(const ASTPtr &, const StorageMetadataPtr &, ContextPtr query_context, TableExclusiveLockHolder &)
 {
+    assertNotReadonly();
     {
         /// Asks to complete merges and does not allow them to start.
         /// This protects against "revival" of data for a removed partition after completion of merge.
@@ -1779,6 +1789,7 @@ void StorageMergeTree::truncate(const ASTPtr &, const StorageMetadataPtr &, Cont
 
 void StorageMergeTree::dropPart(const String & part_name, bool detach, ContextPtr query_context)
 {
+    assertNotReadonly();
     {
         /// Asks to complete merges and does not allow them to start.
         /// This protects against "revival" of data for a removed partition after completion of merge.
@@ -1842,6 +1853,7 @@ void StorageMergeTree::dropPart(const String & part_name, bool detach, ContextPt
 
 void StorageMergeTree::dropPartition(const ASTPtr & partition, bool detach, ContextPtr query_context)
 {
+    assertNotReadonly();
     {
         const auto * partition_ast = partition->as<ASTPartition>();
 
@@ -1959,6 +1971,8 @@ PartitionCommandsResultInfo StorageMergeTree::attachPartition(
     const ASTPtr & partition, const StorageMetadataPtr & /* metadata_snapshot */,
     bool attach_part, ContextPtr local_context)
 {
+    assertNotReadonly();
+
     PartitionCommandsResultInfo results;
     PartsTemporaryRename renamed_parts(*this, "detached/");
     MutableDataPartsVector loaded_parts = tryLoadPartsToAttach(partition, attach_part, local_context, renamed_parts);
@@ -2395,6 +2409,12 @@ void StorageMergeTree::fillNewPartName(MutableDataPartPtr & part, DataPartsLock 
     part->info.min_block = part->info.max_block = increment.get();
     part->info.mutation = 0;
     part->setName(part->getNewName(part->info));
+}
+
+void StorageMergeTree::assertNotReadonly() const
+{
+    if (is_readonly)
+        throw Exception(ErrorCodes::TABLE_IS_READ_ONLY, "Table is in readonly mode due to engine being changed.");
 }
 
 }
