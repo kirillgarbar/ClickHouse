@@ -29,6 +29,7 @@
 #include <Parsers/ASTLiteral.h>
 #include <Parsers/ASTInsertQuery.h>
 #include <Parsers/ParserCreateQuery.h>
+#include <Parsers/ParserRenameQuery.h>
 #include <Parsers/formatAST.h>
 #include <Parsers/parseQuery.h>
 
@@ -413,8 +414,13 @@ void TableEngineModifier::createTable(ASTPtr & modify_query_ptr, ContextMutableP
     DatabaseCatalog::instance().addDependencies(qualified_name, ref_dependencies, loading_dependencies);
 }
 
-void TableEngineModifier::renameTable(ASTPtr & query_ptr, ContextMutablePtr context)
+void TableEngineModifier::renameTable(String & table_name, String & table_name_new, String & database_name, ContextMutablePtr context)
 {
+    ParserRenameQuery p_rename_query;
+
+    String rename_query = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_new);
+    auto query_ptr = parseQuery(p_rename_query, rename_query, "", 0, 0);
+
     const auto & rename = query_ptr->as<const ASTRenameQuery &>();
 
     String path = context->getPath();

@@ -34,7 +34,7 @@ public:
     TableEngineModifier() = default;
 
     void createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context, String & table_name_new, String & database_name);
-    void renameTable(ASTPtr & query_ptr, ContextMutablePtr context);
+    void renameTable(String & table_name, String & table_name_new, String & database_name, ContextMutablePtr context);
     static void setReadonly(StoragePtr table, bool value);
 
     /// On cluster

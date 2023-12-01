@@ -61,7 +61,6 @@ BlockIO InterpreterModifyEngineQuery::execute()
 {
     FunctionNameNormalizer().visit(query_ptr.get());
     const auto & query = query_ptr->as<ASTModifyEngineQuery &>();
-    const auto & storage = query.storage->as<ASTStorage &>();
 
     if (query.cluster.empty())
     {
@@ -108,13 +107,8 @@ BlockIO InterpreterModifyEngineQuery::execute()
 
             //Rename tables
             //TODO: Atomic exchange
-            ParserRenameQuery p_rename_query;
-            String rename_query_old = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_old);
-            String rename_query_new = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name_new, table_name);
-            auto parsed_rename_query_old = parseQuery(p_rename_query, rename_query_old, "", 0, 0);
-            auto parsed_rename_query_new = parseQuery(p_rename_query, rename_query_new, "", 0, 0);
-            engine_modifier->renameTable(parsed_rename_query_old, query_context);
-            engine_modifier->renameTable(parsed_rename_query_new, query_context);
+            engine_modifier->renameTable(table_name, table_name_old, database_name, query_context);
+            engine_modifier->renameTable(table_name_new, table_name, database_name, query_context);
 
             //Get partition ids
             String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_name_old, database_name);
