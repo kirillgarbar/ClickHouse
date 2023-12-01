@@ -116,6 +116,12 @@ namespace ErrorCodes
 
 namespace fs = std::filesystem;
 
+TableEngineModifier::TableEngineModifier(String & table_name_, String & database_name_)
+    : table_name(table_name_)
+    , table_name_temp(table_name + "_temp")
+    , database_name(database_name_)
+    {}
+
 ASTPtr TableEngineModifier::formatIndices(const IndicesDescription & indices)
 {
     auto res = std::make_shared<ASTExpressionList>();
@@ -250,16 +256,14 @@ TableEngineModifier::TableProperties TableEngineModifier::getTablePropertiesAndN
     create.columns_list->setOrReplace(create.columns_list->constraints, new_constraints);
     create.columns_list->setOrReplace(create.columns_list->projections, new_projections);
 
-    assert(as_database_saved.empty() && as_table_saved.empty());
-    std::swap(create.as_database, as_database_saved);
-    std::swap(create.as_table, as_table_saved);
-
     return properties;
 }
 
 void TableEngineModifier::assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database, ContextMutablePtr context) const
 {
     const auto * kind = "Table";
+
+    bool internal = true;
 
     if (database->getEngineName() == "Replicated" && context->getClientInfo().is_replicated_database_internal
         && !internal)
@@ -386,14 +390,13 @@ bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
 }
 
 
-void TableEngineModifier::createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context, String & table_name_new, String & database_name)
+void TableEngineModifier::createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context)
 {
     auto & query = modify_query_ptr->as<ASTModifyEngineQuery &>();
     auto & storage = query.storage->as<ASTStorage &>();
-    String table_name = query.getTable();
 
     String storage_string = queryToString(storage);
-    String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
+    String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_temp, table_name, storage_string);
     ParserCreateQuery p_create_query;
     auto query_ptr = parseQuery(p_create_query, query1, "", 0, 0);
 
@@ -414,17 +417,14 @@ void TableEngineModifier::createTable(ASTPtr & modify_query_ptr, ContextMutableP
     DatabaseCatalog::instance().addDependencies(qualified_name, ref_dependencies, loading_dependencies);
 }
 
-void TableEngineModifier::renameTable(String & table_name, String & table_name_new, String & database_name, ContextMutablePtr context)
+void TableEngineModifier::renameTable(ContextMutablePtr context)
 {
     ParserRenameQuery p_rename_query;
 
-    String rename_query = fmt::format("EXCHANGE TABLES {0}.{1} AND {0}.{2};", database_name, table_name, table_name_new);
+    String rename_query = fmt::format("EXCHANGE TABLES {0}.{1} AND {0}.{2};", database_name, table_name, table_name_temp);
     auto query_ptr = parseQuery(p_rename_query, rename_query, "", 0, 0);
 
     const auto & rename = query_ptr->as<const ASTRenameQuery &>();
-
-    String path = context->getPath();
-    String current_database = context->getCurrentDatabase();
 
     /** In case of error while renaming, it is possible that only part of tables was renamed
       *  or we will be in inconsistent state. (It is worth to be fixed.)
@@ -435,7 +435,7 @@ void TableEngineModifier::renameTable(String & table_name, String & table_name_n
 
     for (const auto & elem : rename.elements)
     {
-        descriptions.emplace_back(elem, current_database);
+        descriptions.emplace_back(elem, database_name);
     }
 
     auto & database_catalog = DatabaseCatalog::instance();
@@ -536,10 +536,10 @@ void TableEngineModifier::setReadonly(StoragePtr table, bool value)
     throw Exception(ErrorCodes::BAD_ARGUMENTS, "Readonly flag for this kind of tables is not implemented");
 }
 
-void TableEngineModifier::attachAllPartitionsToTable(String & table_from, String & table_to, String & database_name, ContextMutablePtr query_context)
+void TableEngineModifier::attachAllPartitionsToTable(ContextMutablePtr query_context)
 {
     //Get partition ids
-    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_from, database_name);
+    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_name_temp, database_name);
     WriteBufferFromOwnString buffer2;
     ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
     auto select_query_context2 = Context::createCopy(query_context);
@@ -554,7 +554,7 @@ void TableEngineModifier::attachAllPartitionsToTable(String & table_from, String
     //Attach partitions
     while (std::getline(partition_ids_string, line, '\n'))
     {
-        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_to, line, table_from);
+        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name, line, table_name_temp);
         executeQuery(query3, query_context, true);
     }
 }

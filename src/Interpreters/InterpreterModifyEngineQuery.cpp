@@ -97,17 +97,17 @@ BlockIO InterpreterModifyEngineQuery::execute()
             auto query_context = Context::createCopy(context);
 
             DDLGuardPtr ddl_guard = DatabaseCatalog::instance().getDDLGuard(database_name, table_name);
-            DDLGuardPtr ddl_guard_new = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_temp);
+            DDLGuardPtr ddl_guard_temp = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_temp);
 
             //Create table
-            auto engine_modifier = std::make_unique<TableEngineModifier>();
-            engine_modifier->createTable(query_ptr, query_context, table_name_temp, database_name);
+            auto engine_modifier = std::make_unique<TableEngineModifier>(table_name, database_name);
+            engine_modifier->createTable(query_ptr, query_context);
 
             //Rename tables
-            engine_modifier->renameTable(table_name_temp, table_name, database_name, query_context);
+            engine_modifier->renameTable(query_context);
 
             //Attach partitions
-            TableEngineModifier::attachAllPartitionsToTable(table_name_temp, table_name, database_name, query_context);
+            engine_modifier->attachAllPartitionsToTable(query_context);
 
             TableEngineModifier::setReadonly(table, false);
             
@@ -115,14 +115,17 @@ BlockIO InterpreterModifyEngineQuery::execute()
             //table_new->startup();
             
             ddl_guard.reset();
-            ddl_guard_new.reset();
+            ddl_guard_temp.reset();
         } catch (...) {
             TableEngineModifier::setReadonly(table, false);
             throw;
         }
-    } else
+    } 
+    else
     {
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine on cluster is not implemented yet.");
+        //Doesn't work correctly if converting to replicated while tables on other hosts aren't empty
+        //TODO: Attach only on one host?
         //return executeDDLQueryOnCluster(query_ptr, getContext());
     }
 

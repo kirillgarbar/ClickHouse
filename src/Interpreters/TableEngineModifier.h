@@ -31,17 +31,20 @@ using DDLGuardPtr = std::unique_ptr<DDLGuard>;
 class TableEngineModifier
 {
 public:
-    TableEngineModifier() = default;
+    TableEngineModifier(String & table_name_, String & database_name_);
 
-    void createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context, String & table_name_new, String & database_name);
-    void renameTable(String & table_name, String & table_name_new, String & database_name, ContextMutablePtr context);
+    void createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context);
+    void renameTable(ContextMutablePtr context);
+    void attachAllPartitionsToTable(ContextMutablePtr query_context);
+
     static void setReadonly(StoragePtr table, bool value);
-    static void attachAllPartitionsToTable(String & table_from, String & table_to, String & database_name, ContextMutablePtr query_context);
 
-    /// On cluster
     void prepareOnClusterQuery(ASTCreateQuery & create, ContextPtr context, const String & cluster_name);
-
 private:
+    String table_name;
+    String table_name_temp;
+    String database_name;
+
     struct TableProperties
     {
         ColumnsDescription columns;
@@ -63,11 +66,5 @@ private:
     bool doCreateTable(ASTPtr & query_ptr, const TableProperties & properties, ContextMutablePtr context);
 
     void assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database, ContextMutablePtr context) const;
-
-    /// Is this an internal query - not from the user.
-    bool internal = true;
-
-    mutable String as_database_saved;
-    mutable String as_table_saved;
 };
 }
