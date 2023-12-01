@@ -418,7 +418,7 @@ void TableEngineModifier::renameTable(String & table_name, String & table_name_n
 {
     ParserRenameQuery p_rename_query;
 
-    String rename_query = fmt::format("RENAME TABLE {0}.{1} TO {0}.{2};", database_name, table_name, table_name_new);
+    String rename_query = fmt::format("EXCHANGE TABLES {0}.{1} AND {0}.{2};", database_name, table_name, table_name_new);
     auto query_ptr = parseQuery(p_rename_query, rename_query, "", 0, 0);
 
     const auto & rename = query_ptr->as<const ASTRenameQuery &>();
@@ -445,34 +445,21 @@ void TableEngineModifier::renameTable(String & table_name, String & table_name_n
 
     for (const auto & elem : descriptions)
     {
-        if (elem.if_exists)
-        {
-            assert(!rename.exchange);
-            if (!database_catalog.isTableExist(StorageID(elem.from_database_name, elem.from_table_name), context))
-                continue;
-        }
-
-        database_catalog.assertTableDoesntExist(StorageID(elem.to_database_name, elem.to_table_name), context);
-
-        DatabasePtr database = database_catalog.getDatabase(elem.from_database_name);
+        DatabasePtr database = database_catalog.getDatabase(database_name);
         
         StorageID from_table_id{elem.from_database_name, elem.from_table_name};
         StorageID to_table_id{elem.to_database_name, elem.to_table_name};
         std::vector<StorageID> ref_dependencies;
         std::vector<StorageID> loading_dependencies;
 
-        bool check_ref_deps = context->getSettingsRef().check_referential_table_dependencies;
-        bool check_loading_deps = !check_ref_deps && context->getSettingsRef().check_table_dependencies;
-        std::tie(ref_dependencies, loading_dependencies) = database_catalog.removeDependencies(from_table_id, check_ref_deps, check_loading_deps);
-
         try
         {
             database->renameTable(
                 context,
                 elem.from_table_name,
-                *database_catalog.getDatabase(elem.to_database_name),
+                *database,
                 elem.to_table_name,
-                false,
+                true,
                 rename.dictionary);
 
             DatabaseCatalog::instance().addDependencies(to_table_id, ref_dependencies, loading_dependencies);

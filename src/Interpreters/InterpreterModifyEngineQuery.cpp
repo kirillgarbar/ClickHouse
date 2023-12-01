@@ -92,26 +92,22 @@ BlockIO InterpreterModifyEngineQuery::execute()
             String database_name = (database) ? database->getDatabaseName() : "default";
             String table_name = query.getTable();
             //TODO: Make sure name is unique
-            String table_name_new = fmt::format("{0}_new", table_name);
-            String table_name_old = fmt::format("{0}_old", table_name);
+            String table_name_temp = fmt::format("{0}_temp", table_name);
 
             auto query_context = Context::createCopy(context);
 
             DDLGuardPtr ddl_guard = DatabaseCatalog::instance().getDDLGuard(database_name, table_name);
-            DDLGuardPtr ddl_guard_new = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_new);
-            DDLGuardPtr ddl_guard_old = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_old);
+            DDLGuardPtr ddl_guard_new = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_temp);
 
             //Create table
             auto engine_modifier = std::make_unique<TableEngineModifier>();
-            engine_modifier->createTable(query_ptr, query_context, table_name_new, database_name);
+            engine_modifier->createTable(query_ptr, query_context, table_name_temp, database_name);
 
             //Rename tables
-            //TODO: Atomic exchange
-            engine_modifier->renameTable(table_name, table_name_old, database_name, query_context);
-            engine_modifier->renameTable(table_name_new, table_name, database_name, query_context);
+            engine_modifier->renameTable(table_name_temp, table_name, database_name, query_context);
 
             //Get partition ids
-            String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_name_old, database_name);
+            String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_name_temp, database_name);
             WriteBufferFromOwnString buffer2;
             ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
             auto select_query_context2 = Context::createCopy(context);
@@ -126,7 +122,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
             //Attach partitions
             while (std::getline(partition_ids_string, line, '\n'))
             {
-                String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name, line, table_name_old);
+                String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name, line, table_name_temp);
                 executeQuery(query3, query_context, true);
             }
 
@@ -137,7 +133,6 @@ BlockIO InterpreterModifyEngineQuery::execute()
             
             ddl_guard.reset();
             ddl_guard_new.reset();
-            ddl_guard_old.reset();
         } catch (...) {
             TableEngineModifier::setReadonly(table, false);
             throw;
