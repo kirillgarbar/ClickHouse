@@ -113,7 +113,8 @@ StorageMergeTree::StorageMergeTree(
 {
     initializeDirectoriesAndFormatVersion(relative_data_path_, attach, date_column_name);
 
-    loadDataParts(has_force_restore_data_flag);
+
+    loadDataParts(has_force_restore_data_flag, std::nullopt);
 
     if (!attach && !getDataPartsForInternalUsage().empty() && !isStaticStorage())
         throw Exception(ErrorCodes::INCORRECT_DATA,
@@ -160,7 +161,7 @@ void StorageMergeTree::startup()
         /// It means that failed "startup" must not create any background tasks that we will have to wait.
         try
         {
-            shutdown();
+            shutdown(false);
         }
         catch (...)
         {
@@ -172,7 +173,7 @@ void StorageMergeTree::startup()
     }
 }
 
-void StorageMergeTree::shutdown()
+void StorageMergeTree::shutdown(bool)
 {
     if (shutdown_called.exchange(true))
         return;
@@ -198,7 +199,7 @@ void StorageMergeTree::shutdown()
 
 StorageMergeTree::~StorageMergeTree()
 {
-    shutdown();
+    shutdown(false);
 }
 
 void StorageMergeTree::read(
@@ -293,7 +294,7 @@ void StorageMergeTree::checkTableCanBeDropped([[ maybe_unused ]] ContextPtr quer
 
 void StorageMergeTree::drop()
 {
-    shutdown();
+    shutdown(true);
     /// In case there is read-only disk we cannot allow to call dropAllData(), but dropping tables is allowed.
     if (isStaticStorage())
         return;
@@ -346,6 +347,8 @@ void StorageMergeTree::alter(
                     prev_mutation = it->first;
             }
 
+            /// Always wait previous mutations synchronously, because alters
+            /// should be executed in sequential order.
             if (prev_mutation != 0)
             {
                 LOG_DEBUG(log, "Cannot change metadata with barrier alter query, will wait for mutation {}", prev_mutation);
@@ -373,9 +376,7 @@ void StorageMergeTree::alter(
             resetObjectColumnsFromActiveParts(parts_lock);
         }
 
-        /// Always execute required mutations synchronously, because alters
-        /// should be executed in sequential order.
-        if (!maybe_mutation_commands.empty())
+        if (!maybe_mutation_commands.empty() && local_context->getSettingsRef().alter_sync > 0)
             waitForMutation(mutation_version, false);
     }
 
@@ -2225,20 +2226,24 @@ void StorageMergeTree::onActionLockRemove(StorageActionBlockType action_type)
         background_moves_assignee.trigger();
 }
 
-IStorage::DataValidationTasksPtr StorageMergeTree::getCheckTaskList(const ASTPtr & query, ContextPtr local_context)
+IStorage::DataValidationTasksPtr StorageMergeTree::getCheckTaskList(
+    const std::variant<std::monostate, ASTPtr, String> & check_task_filter, ContextPtr local_context)
 {
     DataPartsVector data_parts;
-    if (const auto & check_query = query->as<ASTCheckQuery &>(); check_query.partition)
+    if (const auto * partition_opt = std::get_if<ASTPtr>(&check_task_filter))
     {
-        String partition_id = getPartitionIDFromQuery(check_query.partition, local_context);
+        const auto & partition = *partition_opt;
+        if (!partition->as<ASTPartition>())
+            throw Exception(ErrorCodes::LOGICAL_ERROR, "Expected partition, got {}", partition->formatForErrorMessage());
+        String partition_id = getPartitionIDFromQuery(partition, local_context);
         data_parts = getVisibleDataPartsVectorInPartition(local_context, partition_id);
     }
-    else if (!check_query.part_name.empty())
+    else if (const auto * part_name = std::get_if<String>(&check_task_filter))
     {
-        auto part = getPartIfExists(check_query.part_name, {MergeTreeDataPartState::Active, MergeTreeDataPartState::Outdated});
+        auto part = getPartIfExists(*part_name, {MergeTreeDataPartState::Active, MergeTreeDataPartState::Outdated});
         if (!part)
             throw Exception(ErrorCodes::NO_SUCH_DATA_PART, "No such data part '{}' to check in table '{}'",
-                            check_query.part_name, getStorageID().getFullTableName());
+                            *part_name, getStorageID().getFullTableName());
         data_parts.emplace_back(std::move(part));
     }
     else
