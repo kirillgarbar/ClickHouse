@@ -535,4 +535,27 @@ void TableEngineModifier::setReadonly(StoragePtr table, bool value)
     }
     throw Exception(ErrorCodes::BAD_ARGUMENTS, "Readonly flag for this kind of tables is not implemented");
 }
+
+void TableEngineModifier::attachAllPartitionsToTable(String & table_from, String & table_to, String & database_name, ContextMutablePtr query_context)
+{
+    //Get partition ids
+    String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_from, database_name);
+    WriteBufferFromOwnString buffer2;
+    ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
+    auto select_query_context2 = Context::createCopy(query_context);
+    select_query_context2->makeQueryContext();
+    select_query_context2->setCurrentQueryId("");
+
+    executeQuery(buffer3, buffer2, false, select_query_context2, {});
+
+    std::stringstream partition_ids_string{buffer2.str()};
+    std::string line;
+
+    //Attach partitions
+    while (std::getline(partition_ids_string, line, '\n'))
+    {
+        String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_to, line, table_from);
+        executeQuery(query3, query_context, true);
+    }
+}
 }

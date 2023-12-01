@@ -36,6 +36,7 @@ public:
     void createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context, String & table_name_new, String & database_name);
     void renameTable(String & table_name, String & table_name_new, String & database_name, ContextMutablePtr context);
     static void setReadonly(StoragePtr table, bool value);
+    static void attachAllPartitionsToTable(String & table_from, String & table_to, String & database_name, ContextMutablePtr query_context);
 
     /// On cluster
     void prepareOnClusterQuery(ASTCreateQuery & create, ContextPtr context, const String & cluster_name);

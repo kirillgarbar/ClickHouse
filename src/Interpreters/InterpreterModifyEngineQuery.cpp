@@ -106,25 +106,8 @@ BlockIO InterpreterModifyEngineQuery::execute()
             //Rename tables
             engine_modifier->renameTable(table_name_temp, table_name, database_name, query_context);
 
-            //Get partition ids
-            String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_name_temp, database_name);
-            WriteBufferFromOwnString buffer2;
-            ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
-            auto select_query_context2 = Context::createCopy(context);
-            select_query_context2->makeQueryContext();
-            select_query_context2->setCurrentQueryId("");
-
-            executeQuery(buffer3, buffer2, false, select_query_context2, {});
-
-            std::stringstream partition_ids_string{buffer2.str()};
-            std::string line;
-
             //Attach partitions
-            while (std::getline(partition_ids_string, line, '\n'))
-            {
-                String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name, line, table_name_temp);
-                executeQuery(query3, query_context, true);
-            }
+            TableEngineModifier::attachAllPartitionsToTable(table_name_temp, table_name, database_name, query_context);
 
             TableEngineModifier::setReadonly(table, false);
             
