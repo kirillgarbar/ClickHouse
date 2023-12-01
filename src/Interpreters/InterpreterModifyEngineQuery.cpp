@@ -103,12 +103,8 @@ BlockIO InterpreterModifyEngineQuery::execute()
             DDLGuardPtr ddl_guard_old = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_old);
 
             //Create table
-            String storage_string = queryToString(storage);
-            String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
-            ParserCreateQuery p_create_query;
-            auto parsed_query = parseQuery(p_create_query, query1, "", 0, 0);
             auto engine_modifier = std::make_unique<TableEngineModifier>();
-            engine_modifier->createTable(parsed_query, query_context);
+            engine_modifier->createTable(query_ptr, query_context, table_name_new, database_name);
 
             //Rename tables
             //TODO: Atomic exchange

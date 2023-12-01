@@ -33,7 +33,7 @@ class TableEngineModifier
 public:
     TableEngineModifier() = default;
 
-    void createTable(ASTPtr & query_ptr, ContextMutablePtr context);
+    void createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context, String & table_name_new, String & database_name);
     void renameTable(ASTPtr & query_ptr, ContextMutablePtr context);
     static void setReadonly(StoragePtr table, bool value);
 

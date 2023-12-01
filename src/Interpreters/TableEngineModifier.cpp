@@ -11,7 +11,9 @@
 #include <Common/atomicRename.h>
 #include <Common/logger_useful.h>
 #include "Interpreters/Context_fwd.h"
+#include "Parsers/ASTModifyEngineQuery.h"
 #include "Parsers/IAST_fwd.h"
+#include "Parsers/queryToString.h"
 #include "Storages/StorageMergeTree.h"
 #include <base/hex.h>
 
@@ -383,16 +385,20 @@ bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
 }
 
 
-void TableEngineModifier::createTable(ASTPtr & query_ptr, ContextMutablePtr context)
+void TableEngineModifier::createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context, String & table_name_new, String & database_name)
 {
+    auto & query = modify_query_ptr->as<ASTModifyEngineQuery &>();
+    auto & storage = query.storage->as<ASTStorage &>();
+    String table_name = query.getTable();
+
+    String storage_string = queryToString(storage);
+    String query1 = fmt::format("CREATE TABLE {0}.{1} AS {0}.{2} {3}", database_name, table_name_new, table_name, storage_string);
+    ParserCreateQuery p_create_query;
+    auto query_ptr = parseQuery(p_create_query, query1, "", 0, 0);
+
     auto & create = query_ptr->as<ASTCreateQuery &>();
 
-    String current_database = context->getCurrentDatabase();
-    auto database_name = create.database ? create.getDatabase() : current_database;
     DatabasePtr database = DatabaseCatalog::instance().getDatabase(database_name);
-
-    if (!create.temporary && !create.database)
-        create.setDatabase(current_database);
 
     /// Set and retrieve list of columns, indices and constraints. Set table engine if needed. Rewrite query in canonical way.
     TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create, context);
