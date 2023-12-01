@@ -12,6 +12,7 @@
 #include <Common/logger_useful.h>
 #include "Interpreters/Context_fwd.h"
 #include "Parsers/IAST_fwd.h"
+#include "Storages/StorageMergeTree.h"
 #include <base/hex.h>
 
 #include <Core/Defines.h>
@@ -521,5 +522,18 @@ void TableEngineModifier::prepareOnClusterQuery(ASTCreateQuery & create, Context
                         "It's not supported for cross replication, because tables must have different UUIDs. "
                         "Please specify unique zookeeper_path explicitly.");
     }
+}
+
+void TableEngineModifier::setReadonly(StoragePtr table, bool value)
+{
+    if (auto table_merge_tree = std::dynamic_pointer_cast<StorageMergeTree>(table))
+    {
+        return table_merge_tree->is_readonly.store(value);
+    }
+    else if (auto table_replicated_merge_tree = std::dynamic_pointer_cast<StorageReplicatedMergeTree>(table))
+    {
+        return table_replicated_merge_tree->is_readonly.store(value);
+    }
+    throw Exception(ErrorCodes::BAD_ARGUMENTS, "Readonly flag for this kind of tables is not implemented");
 }
 }

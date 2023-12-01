@@ -400,6 +400,8 @@ private:
     friend class MutateFromLogEntryTask;
     friend class ReplicatedMergeMutateTaskBase;
 
+    friend class TableEngineModifier;
+
     using MergeStrategyPicker = ReplicatedMergeTreeMergeStrategyPicker;
     using LogEntry = ReplicatedMergeTreeLogEntry;
     using LogEntryPtr = LogEntry::Ptr;

@@ -131,6 +131,8 @@ StorageMergeTree::StorageMergeTree(
 
 void StorageMergeTree::startup()
 {
+    is_readonly.store(false);
+    
     clearEmptyParts();
 
     /// Temporary directories contain incomplete results of merges (after forced restart)
@@ -595,6 +597,8 @@ void StorageMergeTree::setMutationCSN(const String & mutation_id, CSN csn)
 
 void StorageMergeTree::mutate(const MutationCommands & commands, ContextPtr query_context)
 {
+    assertNotReadonly();
+    
     delayMutationOrThrowIfNeeded(nullptr, query_context);
 
     /// Validate partition IDs (if any) before starting mutation
@@ -2414,7 +2418,7 @@ void StorageMergeTree::fillNewPartName(MutableDataPartPtr & part, DataPartsLock 
 void StorageMergeTree::assertNotReadonly() const
 {
     if (is_readonly)
-        throw Exception(ErrorCodes::TABLE_IS_READ_ONLY, "Table is in readonly mode due to engine being changed.");
+        throw Exception(ErrorCodes::TABLE_IS_READ_ONLY, "Table is in readonly mode due to engine being changed");
 }
 
 }

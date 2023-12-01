@@ -119,9 +119,9 @@ public:
 
 private:
 
-    /// If true, the table is throwing on any user 
+    /// If true, the table is throwing on any query
     /// This flag is set only while modifying engine in TableEngineModifier
-    std::atomic_bool is_readonly {false};
+    std::atomic_bool is_readonly {true};
 
     void assertNotReadonly() const;
 
