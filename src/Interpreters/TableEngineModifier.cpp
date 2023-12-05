@@ -546,7 +546,7 @@ void TableEngineModifier::attachAllPartitionsToTable(ContextMutablePtr query_con
     select_query_context2->makeQueryContext();
     select_query_context2->setCurrentQueryId("");
 
-    executeQuery(buffer3, buffer2, false, select_query_context2, {});
+    executeQuery(buffer3, buffer2, false, select_query_context2, {}, {.internal=true});
 
     std::stringstream partition_ids_string{buffer2.str()};
     std::string line;
@@ -555,7 +555,7 @@ void TableEngineModifier::attachAllPartitionsToTable(ContextMutablePtr query_con
     while (std::getline(partition_ids_string, line, '\n'))
     {
         String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name, line, table_name_temp);
-        executeQuery(query3, query_context, true);
+        executeQuery(query3, query_context, {.internal=true});
     }
 }
 }
