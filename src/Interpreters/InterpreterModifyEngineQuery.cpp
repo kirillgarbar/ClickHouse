@@ -3,13 +3,13 @@
 #include <Databases/DatabaseFactory.h>
 #include <Databases/DatabaseReplicated.h>
 #include <Databases/IDatabase.h>
+#include <Parsers/ASTModifyEngineQuery.h>
 #include <Interpreters/AddDefaultDatabaseVisitor.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/FunctionNameNormalizer.h>
 #include <Interpreters/QueryLog.h>
 #include <Interpreters/executeQuery.h>
 #include <Interpreters/TableEngineModifier.h>
-#include <Parsers/ASTModifyEngineQuery.h>
 #include "IO/ReadBufferFromString.h"
 #include "IO/WriteBufferFromString.h"
 #include <Interpreters/executeDDLQueryOnCluster.h>
@@ -25,8 +25,10 @@
 #include <Parsers/parseQuery.h>
 #include <Parsers/ParserCreateQuery.h>
 #include <Storages/IStorage.h>
-#include "Common/Exception.h"
+#include <Storages/StorageFactory.h>
+#include <Common/Exception.h>
 #include <Common/typeid_cast.h>
+#include <Access/Common/AccessType.h>
 
 #include <fmt/core.h>
 
@@ -69,7 +71,7 @@ BlockIO InterpreterModifyEngineQuery::execute()
         StoragePtr table = DatabaseCatalog::instance().tryGetTable(table_id, getContext());
         DatabasePtr database = DatabaseCatalog::instance().getDatabase(table_id.database_name);
 
-        //TODO: Check access rights
+        getContext()->checkAccess(getRequiredAccess());
 
         if (!table)
             throw Exception(ErrorCodes::UNKNOWN_TABLE, "Could not find table: {}", table_id.table_name);
@@ -130,6 +132,33 @@ BlockIO InterpreterModifyEngineQuery::execute()
     }
 
     return {};
+}
+
+AccessRightsElements InterpreterModifyEngineQuery::getRequiredAccess() const
+{
+    /// Internal queries (initiated by the server itself) always have access to everything.
+    if (internal)
+        return {};
+
+    AccessRightsElements required_access;
+    const auto & query = query_ptr->as<const ASTModifyEngineQuery &>();
+
+    String temp_name = query.getTable() + "_temp";
+
+    required_access.emplace_back(AccessType::SELECT | AccessType::DROP_TABLE, query.getDatabase(), query.getTable());
+    required_access.emplace_back(AccessType::SELECT | AccessType::DROP_TABLE, query.getDatabase(), temp_name);
+    required_access.emplace_back(AccessType::CREATE_TABLE | AccessType::INSERT, query.getDatabase(), query.getTable());
+    required_access.emplace_back(AccessType::CREATE_TABLE | AccessType::INSERT, query.getDatabase(), temp_name);
+
+    if (query.storage)
+    {
+        auto & storage = query.storage->as<ASTStorage &>();
+        auto source_access_type = StorageFactory::instance().getSourceAccessType(storage.engine->name);
+        if (source_access_type != AccessType::NONE)
+            required_access.emplace_back(source_access_type);
+    }
+
+    return required_access;
 }
 
 }
