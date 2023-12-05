@@ -1,7 +1,5 @@
 #include <Interpreters/InterpreterModifyEngineQuery.h>
 
-#include <Databases/DatabaseFactory.h>
-#include <Databases/DatabaseReplicated.h>
 #include <Databases/IDatabase.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include <Interpreters/AddDefaultDatabaseVisitor.h>
@@ -10,20 +8,8 @@
 #include <Interpreters/QueryLog.h>
 #include <Interpreters/executeQuery.h>
 #include <Interpreters/TableEngineModifier.h>
-#include "IO/ReadBufferFromString.h"
-#include "IO/WriteBufferFromString.h"
 #include <Interpreters/executeDDLQueryOnCluster.h>
-#include "Parsers/ASTCreateQuery.h"
-#include "Storages/MergeTree/ReplicatedMergeTreeRestartingThread.h"
-#include "Storages/StorageReplicatedMergeTree.h"
-#include <Parsers/ParserRenameQuery.h>
 #include <Storages/StorageMergeTree.h>
-#include <Storages/TableLockHolder.h>
-#include <Parsers/ASTIdentifier_fwd.h>
-#include <Parsers/ASTColumnDeclaration.h>
-#include <Parsers/queryToString.h>
-#include <Parsers/parseQuery.h>
-#include <Parsers/ParserCreateQuery.h>
 #include <Storages/IStorage.h>
 #include <Storages/StorageFactory.h>
 #include <Common/Exception.h>
@@ -31,13 +17,6 @@
 #include <Access/Common/AccessType.h>
 
 #include <fmt/core.h>
-
-#include <memory>
-#include <sstream>
-#include <string>
-
-#include <chrono>
-#include <thread>
 
 
 namespace DB

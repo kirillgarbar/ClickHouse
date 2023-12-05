@@ -1,16 +1,7 @@
-#include <Common/typeid_cast.h>
 #include <Parsers/ParserModifyEngineQuery.h>
-#include <Parsers/CommonParsers.h>
-#include <Parsers/ExpressionElementParsers.h>
-#include <Parsers/ExpressionListParsers.h>
 #include <Parsers/ParserCreateQuery.h>
-#include <Parsers/ParserPartition.h>
-#include <Parsers/ParserSelectWithUnionQuery.h>
-#include <Parsers/ParserSetQuery.h>
 #include <Parsers/ASTIdentifier.h>
-#include <Parsers/ASTIndexDeclaration.h>
 #include <Parsers/ASTModifyEngineQuery.h>
-#include <Parsers/ASTLiteral.h>
 #include <Parsers/parseDatabaseAndTableName.h>
 
 
@@ -26,7 +17,6 @@ bool ParserModifyEngineQuery::parseImpl(Pos & pos, ASTPtr & node, Expected & exp
 
     if (!s_alter_table.ignore(pos, expected))
         return false;
-
     
     if (!parseDatabaseAndTableAsAST(pos, expected, query->database, query->table))
         return false;

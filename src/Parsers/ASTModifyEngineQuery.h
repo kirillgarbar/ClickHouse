@@ -1,9 +1,7 @@
 #pragma once
 
-#include <Parsers/ASTExpressionList.h>
 #include <Parsers/ASTQueryWithOnCluster.h>
 #include <Parsers/ASTQueryWithTableAndOutput.h>
-#include <Parsers/ASTTTLElement.h>
 #include <Parsers/IAST.h>
 
 
@@ -19,7 +17,7 @@ public:
 
     ASTPtr clone() const override;
 
-    QueryKind getQueryKind() const override { return QueryKind::Create; }
+    QueryKind getQueryKind() const override { return QueryKind::ModifyEngine; }
 
     ASTPtr getRewrittenASTWithoutOnCluster(const WithoutOnClusterASTRewriteParams & params) const override
     {

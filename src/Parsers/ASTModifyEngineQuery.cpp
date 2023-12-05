@@ -1,5 +1,3 @@
-#include <iomanip>
-#include <IO/Operators.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include <Common/quoteString.h>
 
@@ -11,7 +9,6 @@ namespace ErrorCodes
     extern const int UNEXPECTED_AST_STRUCTURE;
 }
 
-/** Get the text that identifies this element. */
 String ASTModifyEngineQuery::getID(char delim) const
 {
     return "ModifyEngineQuery" + (delim + getDatabase()) + delim + getTable();
