@@ -2,13 +2,14 @@
 
 #include <Interpreters/IInterpreter.h>
 #include <Parsers/IAST_fwd.h>
+#include <Interpreters/Context.h>
 
 
 namespace DB
 {
 
 class AccessRightsElements;
-class ASTModifyEngoneQuery;
+class ASTModifyEngineQuery;
 
 /** Allows to change table's engine.
   * Creates a new table with desired engine,
@@ -17,16 +18,18 @@ class ASTModifyEngoneQuery;
   * Currently implemented only between MergeTree and
   * it's replicated version.
   */
-class InterpreterModifyEngineQuery : public IInterpreter, WithContext
+class InterpreterModifyEngineQuery : public IInterpreter, WithMutableContext
 {
 public:
-    InterpreterModifyEngineQuery(const ASTPtr & query_ptr_, ContextPtr context_);
+    InterpreterModifyEngineQuery(const ASTPtr & query_ptr_, ContextMutablePtr context_);
 
     BlockIO execute() override;
 
     bool supportsTransactions() const override { return false; }
 
 private:
+    void checkEngineChangeIsPossible(StoragePtr table);
+
     AccessRightsElements getRequiredAccess() const;
 
     ASTPtr query_ptr;

@@ -10,10 +10,12 @@
 #include <Interpreters/TableEngineModifier.h>
 #include <Interpreters/executeDDLQueryOnCluster.h>
 #include <Storages/StorageMergeTree.h>
+#include <Storages/StorageReplicatedMergeTree.h>
 #include <Storages/IStorage.h>
 #include <Storages/StorageFactory.h>
 #include <Common/Exception.h>
 #include <Common/typeid_cast.h>
+#include "Parsers/ASTCreateQuery.h"
 #include <Access/Common/AccessType.h>
 
 #include <fmt/core.h>
@@ -33,7 +35,7 @@ namespace ErrorCodes
 }
 
 
-InterpreterModifyEngineQuery::InterpreterModifyEngineQuery(const ASTPtr & query_ptr_, ContextPtr context_) : WithContext(context_), query_ptr(query_ptr_)
+InterpreterModifyEngineQuery::InterpreterModifyEngineQuery(const ASTPtr & query_ptr_, ContextMutablePtr context_) : WithMutableContext(context_), query_ptr(query_ptr_)
 {
 }
 
@@ -58,42 +60,32 @@ BlockIO InterpreterModifyEngineQuery::execute()
         TableEngineModifier::setReadonly(table, true);
 
         try {
-            if (auto table_merge_tree = dynamic_pointer_cast<StorageMergeTree>(table))
-            {
-                auto unfinished_mutations = table_merge_tree->getUnfinishedMutationCommands();
-                if (!unfinished_mutations.empty())
-                    throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited.");
-            }
+            checkEngineChangeIsPossible(table);
 
             /// Add default database to table identifiers that we can encounter in e.g. default expressions, mutation expression, etc.
             AddDefaultDatabaseVisitor visitor(getContext(), table_id.getDatabaseName());
             visitor.visit(query_ptr);
 
-            //Entity names
+            /// Entity names
             String database_name = (database) ? database->getDatabaseName() : "default";
             String table_name = query.getTable();
-            //TODO: Make sure name is unique
+            /// TODO: Make sure name is unique
             String table_name_temp = fmt::format("{0}_temp", table_name);
-
-            auto query_context = Context::createCopy(context);
 
             DDLGuardPtr ddl_guard = DatabaseCatalog::instance().getDDLGuard(database_name, table_name);
             DDLGuardPtr ddl_guard_temp = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_temp);
 
-            //Create table
-            auto engine_modifier = std::make_unique<TableEngineModifier>(table_name, database_name);
-            engine_modifier->createTable(query_ptr, query_context);
+            /// Create table
+            auto engine_modifier = std::make_unique<TableEngineModifier>(table_name, database_name, getContext());
+            engine_modifier->createTable(query_ptr);
 
-            //Rename tables
-            engine_modifier->renameTable(query_context);
+            /// Rename tables
+            engine_modifier->renameTable();
 
-            //Attach partitions
-            engine_modifier->attachAllPartitionsToTable(query_context);
+            /// Attach partitions
+            engine_modifier->attachAllPartitionsToTable();
 
             TableEngineModifier::setReadonly(table, false);
-            
-            //StoragePtr table_new = DatabaseCatalog::instance().tryGetTable(table_id, query_context);
-            //table_new->startup();
             
             ddl_guard.reset();
             ddl_guard_temp.reset();
@@ -105,12 +97,35 @@ BlockIO InterpreterModifyEngineQuery::execute()
     else
     {
         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine on cluster is not implemented yet.");
-        //Doesn't work correctly if converting to replicated while tables on other hosts aren't empty
-        //TODO: Attach only on one host?
-        //return executeDDLQueryOnCluster(query_ptr, getContext());
+        /// Doesn't work correctly if converting to replicated while tables on other hosts aren't empty
+        /// TODO: Attach only on one host?
     }
 
     return {};
+}
+
+void InterpreterModifyEngineQuery::checkEngineChangeIsPossible(StoragePtr table)
+{
+    String target_engine_name = query_ptr->as<ASTModifyEngineQuery &>().storage->as<ASTStorage &>().engine->name;
+
+    if (auto table_merge_tree = dynamic_pointer_cast<StorageMergeTree>(table))
+    {
+        if (target_engine_name != "MergeTree" && target_engine_name != "ReplicatedMergeTree")
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Converting from MergeTree to {} is not implemented", target_engine_name);
+        auto unfinished_mutations = table_merge_tree->getUnfinishedMutationCommands();
+        if (!unfinished_mutations.empty())
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited");
+    }
+    else if (auto table_replicated_merge_tree = dynamic_pointer_cast<StorageReplicatedMergeTree>(table))
+    {
+        if (target_engine_name != "MergeTree" && target_engine_name != "ReplicatedMergeTree")
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Converting from ReplicatedMergeTree to {} is not implemented", target_engine_name);
+        auto unfinished_mutations = table_replicated_merge_tree->getUnfinishedMutationCommands();
+        if (!unfinished_mutations.empty())
+            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited");
+    }
+    else
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Only MergeTree family tables are supported");
 }
 
 AccessRightsElements InterpreterModifyEngineQuery::getRequiredAccess() const

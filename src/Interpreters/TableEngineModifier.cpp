@@ -88,16 +88,11 @@
 namespace DB
 {
 
-//TODO: Remove unused codes and includes
 namespace ErrorCodes
 {
     extern const int TABLE_ALREADY_EXISTS;
-    extern const int DICTIONARY_ALREADY_EXISTS;
     extern const int EMPTY_LIST_OF_COLUMNS_PASSED;
     extern const int INCORRECT_QUERY;
-    extern const int UNKNOWN_DATABASE_ENGINE;
-    extern const int DUPLICATE_COLUMN;
-    extern const int DATABASE_ALREADY_EXISTS;
     extern const int BAD_ARGUMENTS;
     extern const int BAD_DATABASE_FOR_TEMPORARY_TABLE;
     extern const int SUSPICIOUS_TYPE_FOR_LOW_CARDINALITY;
@@ -116,8 +111,9 @@ namespace ErrorCodes
 
 namespace fs = std::filesystem;
 
-TableEngineModifier::TableEngineModifier(String & table_name_, String & database_name_)
-    : table_name(table_name_)
+TableEngineModifier::TableEngineModifier(String & table_name_, String & database_name_, ContextMutablePtr context_)
+    : WithMutableContext(context_)
+    , table_name(table_name_)
     , table_name_temp(table_name + "_temp")
     , database_name(database_name_)
     {}
@@ -202,14 +198,14 @@ ASTPtr TableEngineModifier::formatColumns(const ColumnsDescription & columns)
     return columns_list;
 }
 
-TableEngineModifier::TableProperties TableEngineModifier::getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create, ContextMutablePtr context) const
+TableEngineModifier::TableProperties TableEngineModifier::getTablePropertiesAndNormalizeCreateQuery(ASTCreateQuery & create) const
 {
     /// We have to check access rights again (in case engine was changed).
     if (create.storage)
     {
         auto source_access_type = StorageFactory::instance().getSourceAccessType(create.storage->engine->name);
         if (source_access_type != AccessType::NONE)
-            context->checkAccess(source_access_type);
+            getContext()->checkAccess(source_access_type);
     }
 
     TableProperties properties;
@@ -217,11 +213,11 @@ TableEngineModifier::TableProperties TableEngineModifier::getTablePropertiesAndN
 
     if (!create.as_table.empty())
     {
-        String as_database_name = context->resolveDatabase(create.as_database);
-        StoragePtr as_storage = DatabaseCatalog::instance().getTable({as_database_name, create.as_table}, context);
+        String as_database_name = getContext()->resolveDatabase(create.as_database);
+        StoragePtr as_storage = DatabaseCatalog::instance().getTable({as_database_name, create.as_table}, getContext());
 
         /// as_storage->getColumns() and setEngine(...) must be called under structure lock of other_table for CREATE ... AS other_table.
-        as_storage_lock = as_storage->lockForShare(context->getCurrentQueryId(), context->getSettingsRef().lock_acquire_timeout);
+        as_storage_lock = as_storage->lockForShare(getContext()->getCurrentQueryId(), getContext()->getSettingsRef().lock_acquire_timeout);
         auto as_storage_metadata = as_storage->getInMemoryMetadataPtr();
         properties.columns = as_storage_metadata->getColumns();
 
@@ -259,13 +255,13 @@ TableEngineModifier::TableProperties TableEngineModifier::getTablePropertiesAndN
     return properties;
 }
 
-void TableEngineModifier::assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database, ContextMutablePtr context) const
+void TableEngineModifier::assertOrSetUUID(ASTCreateQuery & create, const DatabasePtr & database) const
 {
     const auto * kind = "Table";
 
     bool internal = true;
 
-    if (database->getEngineName() == "Replicated" && context->getClientInfo().is_replicated_database_internal
+    if (database->getEngineName() == "Replicated" && getContext()->getClientInfo().is_replicated_database_internal
         && !internal)
     {
         if (create.uuid == UUIDHelpers::Nil)
@@ -278,7 +274,7 @@ void TableEngineModifier::assertOrSetUUID(ASTCreateQuery & create, const Databas
     }
     else
     {
-        bool is_on_cluster = context->getClientInfo().query_kind == ClientInfo::QueryKind::SECONDARY_QUERY;
+        bool is_on_cluster = getContext()->getClientInfo().query_kind == ClientInfo::QueryKind::SECONDARY_QUERY;
         bool has_uuid = create.uuid != UUIDHelpers::Nil || create.to_inner_uuid != UUIDHelpers::Nil;
         if (has_uuid && !is_on_cluster && !internal)
         {
@@ -300,8 +296,7 @@ void TableEngineModifier::assertOrSetUUID(ASTCreateQuery & create, const Databas
 }
 
 bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
-                                           const TableEngineModifier::TableProperties & properties,
-                                           ContextMutablePtr context)
+                                           const TableEngineModifier::TableProperties & properties)
 {
 
     auto & create = query_ptr->as<ASTCreateQuery &>();
@@ -310,11 +305,11 @@ bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
     DatabasePtr database;
 
     database = DatabaseCatalog::instance().getDatabase(create.getDatabase());
-    assertOrSetUUID(create, database, context);
+    assertOrSetUUID(create, database);
 
     /// DELETE?
     /// Table can be created before or it can be created concurrently in another thread, while we were waiting in DDLGuard.
-    if (database->isTableExist(create.getTable(), context))
+    if (database->isTableExist(create.getTable(), getContext()))
     {
         throw Exception(ErrorCodes::TABLE_ALREADY_EXISTS,
             "{} {}.{} already exists", "Table", backQuoteIfNeed(create.getDatabase()), backQuoteIfNeed(create.getTable()));
@@ -333,13 +328,12 @@ bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
     }
 
     data_path = database->getTableDataPath(create);
-    auto full_data_path = fs::path{context->getPath()} / data_path;
+    auto full_data_path = fs::path{getContext()->getPath()} / data_path;
 
-    //DELETE?
     if (!data_path.empty() && fs::exists(full_data_path))
     {
-        if (context->getZooKeeperMetadataTransaction() &&
-            !context->getZooKeeperMetadataTransaction()->isInitialQuery() &&
+        if (getContext()->getZooKeeperMetadataTransaction() &&
+            !getContext()->getZooKeeperMetadataTransaction()->isInitialQuery() &&
             !DatabaseCatalog::instance().hasUUIDMapping(create.uuid) &&
             Context::getGlobalContextInstance()->isServerCompletelyStarted() &&
             Context::getGlobalContextInstance()->getConfigRef().getBool("allow_moving_table_directory_to_trash", false))
@@ -348,7 +342,7 @@ bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
             /// We don't have a table with this UUID (and all metadata is loaded),
             /// so the existing directory probably contains some leftovers from previous unsuccessful attempts to create the table
 
-            fs::path trash_path = fs::path{context->getPath()} / "trash" / data_path / getHexUIntLowercase(thread_local_rng());
+            fs::path trash_path = fs::path{getContext()->getPath()} / "trash" / data_path / getHexUIntLowercase(thread_local_rng());
             LOG_WARNING(&Poco::Logger::get("TableEngineModifier"), "Directory for {} data {} already exists. Will move it to {}",
                         "table", String(data_path), trash_path);
             fs::create_directories(trash_path.parent_path());
@@ -377,20 +371,20 @@ bool TableEngineModifier::doCreateTable(ASTPtr & query_ptr,
     StoragePtr res;
     res = StorageFactory::instance().get(create,
         data_path,
-        context,
-        context->getGlobalContext(),
+        getContext(),
+        getContext()->getGlobalContext(),
         properties.columns,
         properties.constraints,
         false);
 
-    database->createTable(context, create.getTable(), res, query_ptr);
+    database->createTable(getContext(), create.getTable(), res, query_ptr);
 
     res->startup();
     return true;
 }
 
 
-void TableEngineModifier::createTable(ASTPtr & modify_query_ptr, ContextMutablePtr context)
+void TableEngineModifier::createTable(ASTPtr & modify_query_ptr)
 {
     auto & query = modify_query_ptr->as<ASTModifyEngineQuery &>();
     auto & storage = query.storage->as<ASTStorage &>();
@@ -405,19 +399,19 @@ void TableEngineModifier::createTable(ASTPtr & modify_query_ptr, ContextMutableP
     DatabasePtr database = DatabaseCatalog::instance().getDatabase(database_name);
 
     /// Set and retrieve list of columns, indices and constraints. Set table engine if needed. Rewrite query in canonical way.
-    TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create, context);
+    TableProperties properties = getTablePropertiesAndNormalizeCreateQuery(create);
 
     /// Actually creates table
-    doCreateTable(query_ptr, properties, context);
+    doCreateTable(query_ptr, properties);
 
     /// If table has dependencies - add them to the graph
     QualifiedTableName qualified_name{database_name, create.getTable()};
-    auto ref_dependencies = getDependenciesFromCreateQuery(context->getGlobalContext(), qualified_name, query_ptr);
-    auto loading_dependencies = getLoadingDependenciesFromCreateQuery(context->getGlobalContext(), qualified_name, query_ptr);
+    auto ref_dependencies = getDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
+    auto loading_dependencies = getLoadingDependenciesFromCreateQuery(getContext()->getGlobalContext(), qualified_name, query_ptr);
     DatabaseCatalog::instance().addDependencies(qualified_name, ref_dependencies, loading_dependencies);
 }
 
-void TableEngineModifier::renameTable(ContextMutablePtr context)
+void TableEngineModifier::renameTable()
 {
     ParserRenameQuery p_rename_query;
 
@@ -455,7 +449,7 @@ void TableEngineModifier::renameTable(ContextMutablePtr context)
         try
         {
             database->renameTable(
-                context,
+                getContext(),
                 elem.from_table_name,
                 *database,
                 elem.to_table_name,
@@ -536,26 +530,26 @@ void TableEngineModifier::setReadonly(StoragePtr table, bool value)
     throw Exception(ErrorCodes::BAD_ARGUMENTS, "Readonly flag for this kind of tables is not implemented");
 }
 
-void TableEngineModifier::attachAllPartitionsToTable(ContextMutablePtr query_context)
+void TableEngineModifier::attachAllPartitionsToTable()
 {
-    //Get partition ids
+    /// Get partition ids
     String get_attach_queries_query = fmt::format("SELECT DISTINCT partition_id FROM system.parts WHERE table = '{0}' AND database = '{1}' AND active;", table_name_temp, database_name);
-    WriteBufferFromOwnString buffer2;
-    ReadBufferFromOwnString buffer3 {std::move(get_attach_queries_query)};
-    auto select_query_context2 = Context::createCopy(query_context);
-    select_query_context2->makeQueryContext();
-    select_query_context2->setCurrentQueryId("");
+    WriteBufferFromOwnString write_buffer;
+    ReadBufferFromOwnString read_buffer {std::move(get_attach_queries_query)};
+    auto select_query_context = Context::createCopy(getContext());
+    select_query_context->makeQueryContext();
+    select_query_context->setCurrentQueryId("");
 
-    executeQuery(buffer3, buffer2, false, select_query_context2, {}, {.internal=true});
+    executeQuery(read_buffer, write_buffer, false, select_query_context, {}, {.internal=true});
 
-    std::stringstream partition_ids_string{buffer2.str()};
+    std::stringstream partition_ids_string{write_buffer.str()};
     std::string line;
 
-    //Attach partitions
+    /// Attach partitions
     while (std::getline(partition_ids_string, line, '\n'))
     {
         String query3 = fmt::format("ALTER TABLE {0}.{1} ATTACH PARTITION ID '{2}' FROM {0}.{3};", database_name, table_name, line, table_name_temp);
-        executeQuery(query3, query_context, {.internal=true});
+        executeQuery(query3, getContext(), {.internal=true});
     }
 }
 }
