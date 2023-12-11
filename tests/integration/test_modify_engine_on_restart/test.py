@@ -38,6 +38,98 @@ def q(node, database, query):
                     sql=query
                     )
 
+def create_tables(database_name, node):
+    # MergeTree table that will be converted
+    q(
+        node,
+        database_name,
+        "CREATE TABLE foo ( A Int64, D Date, S String ) ENGINE MergeTree() PARTITION BY toYYYYMM(D) ORDER BY A;"
+    )
+
+    q(
+        node,
+        database_name,
+        "INSERT INTO foo SELECT number, today(), '' FROM numbers(1e6);"
+    )
+    q(
+        node,
+        database_name,
+        "INSERT INTO foo SELECT number, today()-60, '' FROM numbers(1e6);"
+    )
+
+    # MergeTree table that will not be converted
+    q(
+        node,
+        database_name,
+        "CREATE TABLE bar ( A Int64, D Date, S String ) ENGINE MergeTree() PARTITION BY toYYYYMM(D) ORDER BY A;"
+    )
+
+    # Not MergeTree table
+    q(
+        node,
+        database_name,
+        "CREATE TABLE bar2 ( A Int64, D Date, S String ) ENGINE Log;"
+    )
+
+def check_tables_not_converted(database_name, node):
+    # Check tables exists
+    assert q(
+        node,
+        database_name,
+        "SHOW TABLES",
+    ).strip() == "bar\nbar2\nfoo"
+
+    # Check engines
+    assert q(
+        node,
+        database_name,
+        f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'foo' OR name = 'foo_temp')",
+    ).strip() == "foo\tMergeTree"
+    assert q(
+        node,
+        database_name,
+        f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'bar' OR name = 'bar2')",
+    ).strip() == "bar\tMergeTree\nbar2\tLog"
+
+    # Check values
+    assert q(
+        node,
+        database_name,
+        "SELECT count() FROM foo",
+    ).strip() == "2000000"
+
+def check_tables_converted(database_name, node):
+    # Check tables exists
+    assert q(
+        node,
+        database_name,
+        "SHOW TABLES",
+    ).strip() == "bar\nbar2\nfoo\nfoo_temp"
+
+    # Check engines
+    assert q(
+        node,
+        database_name,
+        f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'foo' OR name = 'foo_temp')",
+    ).strip() == "foo\tReplicatedMergeTree\nfoo_temp\tMergeTree"
+    assert q(
+        node,
+        database_name,
+        f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'bar' OR name = 'bar2')",
+    ).strip() == "bar\tMergeTree\nbar2\tLog"
+
+    # Check values
+    assert q(
+        node,
+        database_name,
+        "SELECT count() FROM foo",
+    ).strip() == "2000000"
+    assert q(
+        node,
+        database_name,
+        "SELECT count() FROM foo_temp",
+    ).strip() == "2000000"
+
 def test_modify_engine_on_restart(started_cluster):
     database_name = "test1"
     q(
@@ -51,64 +143,27 @@ def test_modify_engine_on_restart(started_cluster):
         "SHOW TABLES"
     ).strip() == ""
 
-    q(
-        ch1,
-        database_name,
-        "CREATE TABLE foo ( A Int64, D Date, S String ) ENGINE MergeTree() PARTITION BY toYYYYMM(D) ORDER BY A;"
-    )
+    create_tables(database_name, ch1)
 
-    q(
-        ch1,
-        database_name,
-        "INSERT INTO foo SELECT number, today(), '' FROM numbers(1e6);"
-    )
-    q(
-        ch1,
-        database_name,
-        "INSERT INTO foo SELECT number, today()-60, '' FROM numbers(1e6);"
-    )
+    check_tables_not_converted(database_name, ch1)
 
+    # Restart server without flags set
+    ch1.restart_clickhouse()
+
+    check_tables_not_converted(database_name, ch1)
+
+    # Set convert flag
     ch1.exec_in_container(
         ["bash", "-c", f"mkdir /var/lib/clickhouse/data/{database_name}/foo/flags"],
         ["bash", "-c", f"touch /var/lib/clickhouse/data/{database_name}/foo/flags/convert_to_replicated"]
     )
 
+    # Set flag to not MergeTree table to check that nothing happens
+    ch1.exec_in_container(
+        ["bash", "-c", f"mkdir /var/lib/clickhouse/data/{database_name}/bar2/flags"],
+        ["bash", "-c", f"touch /var/lib/clickhouse/data/{database_name}/bar2/flags/convert_to_replicated"]
+    )
+
     ch1.restart_clickhouse()
 
-    # Check tables exists
-    assert q(
-        ch1,
-        database_name,
-        "SHOW TABLES",
-    ).strip() == "foo\nfoo_temp"
-
-    # Check engines
-    assert q(
-        ch1,
-        database_name,
-        f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'foo' OR name = 'foo_temp')",
-    ).strip() == "foo\tReplicatedMergeTree\nfoo_temp\tMergeTree"
-
-    # Check values
-    assert q(
-        ch1,
-        database_name,
-        "SELECT count() FROM foo",
-    ).strip() == "2000000"
-    
-
-    # # Add new replica
-    # q(
-    #     ch2,
-    #     database_name,
-    #     f"CREATE TABLE foo ( A Int64, D Date, S String ) ENGINE ReplicatedMergeTree(('/clickhouse/cluster/01/tables/{database_name}/foo', '{{replica}}')) PARTITION BY toYYYYMM(D) ORDER BY A;"
-    # )
-
-    # sleep(5)
-
-    # # Check data is replicated
-    # assert q(
-    #     ch2,
-    #     database_name,
-    #     "SELECT count() FROM test1.foo",
-    # ).strip() == "2000000"
+    check_tables_converted(database_name, ch1)
