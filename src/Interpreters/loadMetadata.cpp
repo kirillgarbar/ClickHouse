@@ -523,7 +523,7 @@ static void convertMergeTreeToReplicated(Poco::Logger * log, ContextMutablePtr c
     String tmp_qualified_quoted_name = id.getFullTableName();
     
     /// Create new table
-    String create_table_query = fmt::format("CREATE TABLE {} AS {} {}", tmp_qualified_quoted_name, qualified_quoted_name, storage_definition);
+    String create_table_query = fmt::format("CREATE TABLE {} UUID '{}' AS {} {}", tmp_qualified_quoted_name, uuid, qualified_quoted_name, storage_definition);
     auto res = executeQuery(create_table_query, context, QueryFlags{ .internal = true }).second;
     executeTrivialBlockIO(res, context);
 
