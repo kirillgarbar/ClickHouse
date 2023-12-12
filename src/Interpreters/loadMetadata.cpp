@@ -503,13 +503,13 @@ void convertDatabasesEnginesIfNeed(const LoadTaskPtrs & load_metadata, ContextMu
 
 static void convertMergeTreeToReplicated(Poco::Logger * log, ContextMutablePtr context, const DatabasePtr & database, StorageID id)
 {
-    /// Get storage definition
-    /// Set the uuid explicitly, because it is forbidden to use the 'uuid' macro without ON CLUSTER
     ASTPtr as_create_ptr = database->getCreateTableQuery(id.table_name, context);
     const auto & as_create = as_create_ptr->as<ASTCreateQuery &>();
     const auto & storage = as_create.storage->as<ASTStorage &>();
     String storage_definition = queryToString(storage);
 
+    /// Get storage definition
+    /// Set the uuid explicitly, because it is forbidden to use the 'uuid' macro without ON CLUSTER
     auto uuid = UUIDHelpers::generateV4();
     String replica_path = context->getConfigRef().getString("default_replica_path", "/clickhouse/tables/{uuid}/{shard}");
     replica_path = boost::algorithm::replace_all_copy(replica_path, "{uuid}", uuid);
@@ -532,8 +532,8 @@ static void convertMergeTreeToReplicated(Poco::Logger * log, ContextMutablePtr c
     executeTrivialBlockIO(res, context);
 
     /// Exchange names
-    String move_table_query = fmt::format("EXCHANGE TABLES {} AND {}", qualified_quoted_name, tmp_qualified_quoted_name);
-    res = executeQuery(move_table_query, context, QueryFlags{ .internal = true }).second;
+    String exchange_tables_query = fmt::format("EXCHANGE TABLES {} AND {}", qualified_quoted_name, tmp_qualified_quoted_name);
+    res = executeQuery(exchange_tables_query, context, QueryFlags{ .internal = true }).second;
     executeTrivialBlockIO(res, context);
 
     /// Get partition ids
@@ -574,18 +574,6 @@ static void findAndConvertMergeTreeTablesToReplicated(ContextMutablePtr context,
     {
         auto local_context = Context::createCopy(context);
 
-        /// We have to stop background operations that may lock table for share to avoid DEADLOCK_AVOIDED error
-        /// on renaming tables. Server has not started to accept connections yet,
-        /// so there are no user queries, only background operations
-        LOG_INFO(log, "Will stop background operations to be able to convert tables in database {}", database_name);
-        static const auto actions_to_stop = {
-            ActionLocks::PartsMerge, ActionLocks::PartsFetch, ActionLocks::PartsSend, ActionLocks::DistributedSend,
-        };
-        for (const auto & action : actions_to_stop)
-            InterpreterSystemQuery::startStopActionInDatabase(action, /* start */ false, database_name, database, context, log);
-
-        local_context->setSetting("check_table_dependencies", false);
-        local_context->setSetting("check_referential_table_dependencies", false);
         for (auto iterator = database->getTablesIterator(context); iterator->isValid(); iterator->next())
         {
             if (const auto * merge_tree = dynamic_cast<const StorageMergeTree *>(iterator->table().get()))
@@ -602,10 +590,6 @@ static void findAndConvertMergeTreeTablesToReplicated(ContextMutablePtr context,
                 }
             }
         }
-
-        LOG_INFO(log, "Will start background operations after converting tables in database {}", database_name);
-        for (const auto & action : actions_to_stop)
-            InterpreterSystemQuery::startStopActionInDatabase(action, /* start */ true, database_name, database, context, log);
     }
     catch (Exception & e)
     {
@@ -623,10 +607,9 @@ void convertMergeTreeToReplicatedIfNeed(ContextMutablePtr context)
                                                  "will try to convert theese tables");
 
     for (const auto & [name, _] : DatabaseCatalog::instance().getDatabases())
-        if (name != DatabaseCatalog::SYSTEM_DATABASE)
-            findAndConvertMergeTreeTablesToReplicated(context, name);
+        findAndConvertMergeTreeTablesToReplicated(context, name);
 
-    LOG_INFO(&Poco::Logger::get("loadMetadata"), "All tables with flags are converted");
+    LOG_INFO(&Poco::Logger::get("loadMetadata"), "All MergTree tables with flags are converted");
 }
 
 LoadTaskPtrs loadMetadataSystem(ContextMutablePtr context)
