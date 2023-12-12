@@ -504,13 +504,17 @@ void convertDatabasesEnginesIfNeed(const LoadTaskPtrs & load_metadata, ContextMu
 static void convertMergeTreeToReplicated(Poco::Logger * log, ContextMutablePtr context, const DatabasePtr & database, StorageID id)
 {
     /// Get storage definition
+    /// Set the uuid explicitly, because it is forbidden to use the 'uuid' macro without ON CLUSTER
     ASTPtr as_create_ptr = database->getCreateTableQuery(id.table_name, context);
     const auto & as_create = as_create_ptr->as<ASTCreateQuery &>();
     const auto & storage = as_create.storage->as<ASTStorage &>();
     String storage_definition = queryToString(storage);
+
     auto uuid = UUIDHelpers::generateV4();
-    String replica_path = fmt::format("/clickhouse/tables/{}/{{shard}}", uuid);
-    String replicated_args = fmt::format("('{}', '{{replica}}')", replica_path);
+    String replica_path = context->getConfigRef().getString("default_replica_path", "/clickhouse/tables/{uuid}/{shard}");
+    replica_path = boost::algorithm::replace_all_copy(replica_path, "{uuid}", uuid);
+    String replica_name = context->getConfigRef().getString("default_replica_name", "{replica}");
+    String replicated_args = fmt::format("('{}', '{}')", replica_path, replica_name);
     String replicated_engine = "Replicated" + storage.engine->name + replicated_args;
 
     storage_definition = boost::algorithm::replace_first_copy(storage_definition, storage.engine->name, replicated_engine);
