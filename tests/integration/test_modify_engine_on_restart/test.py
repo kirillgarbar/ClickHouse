@@ -189,7 +189,7 @@ def check_replica_added(database_name, node1, node2):
     ).strip() == "1100000"
 
 def test_modify_engine_on_restart(started_cluster):
-    database_name = "test1"
+    database_name = "modify_engine"
     q(
         ch1,
         "default",
