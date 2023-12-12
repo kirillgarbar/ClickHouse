@@ -26,4 +26,7 @@ void maybeConvertSystemDatabase(ContextMutablePtr context, LoadTaskPtrs & system
 /// Waits for `load_metadata` task before conversions
 void convertDatabasesEnginesIfNeed(const LoadTaskPtrs & load_metadata, ContextMutablePtr context);
 
+/// Converts all marked MergeTree tables to replicated
+void convertMergeTreeToReplicatedIfNeed(ContextMutablePtr context);
+
 }
