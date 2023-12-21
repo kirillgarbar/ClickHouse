@@ -58,6 +58,12 @@ def create_tables():
     q(ch1, "INSERT INTO replacing SELECT number, today(), '' FROM numbers(1e6);")
     q(ch1, "INSERT INTO replacing SELECT number, today()-60, '' FROM numbers(1e5);")
 
+    # Table with arguments to check that they will not be lost during convertation
+    q(
+        ch1,
+        "CREATE TABLE collapsing_ver ( ID UInt64, Sign Int8, Version UInt8 ) ENGINE = VersionedCollapsingMergeTree(Sign, Version) ORDER BY ID",
+    )
+
     # MergeTree table that will be converted to MergeTree
     q(
         ch1,
@@ -79,6 +85,11 @@ def convert_tables():
         "ALTER TABLE replacing MODIFY ENGINE TO REPLICATED",
     )
 
+    q(
+        ch1,
+        "ALTER TABLE collapsing_ver MODIFY ENGINE TO REPLICATED",
+    )
+
 
 def check_tables_converted():
     # Check tables exists
@@ -87,7 +98,7 @@ def check_tables_converted():
             ch1,
             "SHOW TABLES",
         ).strip()
-        == "log\nmt\nreplacing\nrmt"
+        == "collapsing_ver\nlog\nmt\nreplacing\nrmt"
     )
 
     # Check engines
@@ -96,7 +107,7 @@ def check_tables_converted():
             ch1,
             f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name != 'log' AND name != 'mt')",
         ).strip()
-        == f"replacing\tReplicatedReplacingMergeTree\nrmt\tReplicatedMergeTree"
+        == f"collapsing_ver\tReplicatedVersionedCollapsingMergeTree\nreplacing\tReplicatedReplacingMergeTree\nrmt\tReplicatedMergeTree"
     )
     assert (
         q(
@@ -104,6 +115,22 @@ def check_tables_converted():
             f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'log' OR name = 'mt')",
         ).strip()
         == "log\tLog\nmt\tMergeTree"
+    )
+
+    # Check arguments
+    collapsing_uuid = q(
+        ch1,
+        f"SELECT uuid FROM system.tables WHERE database = '{database_name}' and name = 'collapsing_ver'",
+    ).strip()
+    assert (
+        q(
+            ch1,
+            f"SELECT engine_full FROM system.tables WHERE database = '{database_name}' and name = 'collapsing_ver'",
+        )
+        .strip()
+        .startswith(
+            f"ReplicatedVersionedCollapsingMergeTree(\\'/clickhouse/tables/{collapsing_uuid}/{{shard}}\\', \\'{{replica}}\\', Sign, Version)"
+        )
     )
 
     # Check values
