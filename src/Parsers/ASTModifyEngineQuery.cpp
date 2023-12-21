@@ -18,17 +18,11 @@ ASTPtr ASTModifyEngineQuery::clone() const
 {
     auto res = std::make_shared<ASTModifyEngineQuery>(*this);
     res->children.clear();
-
-    if (storage)
-    {
-        res->storage = storage->clone();
-        res->children.push_back(res->storage);
-    }
-
+    res->to_replicated = to_replicated;
     return res;
 }
 
-void ASTModifyEngineQuery::formatQueryImpl(const FormatSettings & settings, FormatState & state, FormatStateStacked frame) const
+void ASTModifyEngineQuery::formatQueryImpl(const FormatSettings & settings, FormatState &, FormatStateStacked frame) const
 {
     frame.need_parens = false;
 
@@ -49,10 +43,9 @@ void ASTModifyEngineQuery::formatQueryImpl(const FormatSettings & settings, Form
 
     formatOnCluster(settings);
 
-    settings.ostr << (settings.hilite ? hilite_keyword : "") << " MODIFY " 
-    << (settings.hilite ? hilite_none : "");
-    
-    storage->formatImpl(settings, state, frame);
+    settings.ostr << (settings.hilite ? hilite_keyword : "") << " MODIFY ENGINE TO ";
+    if (!to_replicated) settings.ostr << "NOT ";
+    settings.ostr << "REPLICATED" << (settings.hilite ? hilite_none : "");
 }
 
 }

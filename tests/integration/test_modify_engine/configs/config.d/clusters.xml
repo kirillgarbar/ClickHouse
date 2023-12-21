@@ -7,6 +7,10 @@
                 <host>ch1</host>
                 <port>9000</port>
             </replica>
+            <replica>
+                <host>ch2</host>
+                <port>9000</port>
+            </replica>
         </shard>
     </cluster>
 </remote_servers>

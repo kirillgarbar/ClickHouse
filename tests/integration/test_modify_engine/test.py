@@ -10,7 +10,19 @@ ch1 = cluster.add_instance(
     ],
     with_zookeeper=True,
     macros={"replica": "node1"},
+    stay_alive=True,
 )
+ch2 = cluster.add_instance(
+    "ch2",
+    main_configs=[
+        "configs/config.d/clusters.xml",
+        "configs/config.d/distributed_ddl.xml",
+    ],
+    with_zookeeper=True,
+    macros={"replica": "node2"},
+)
+
+database_name = "modify_engine"
 
 
 @pytest.fixture(scope="module")
@@ -22,149 +34,126 @@ def started_cluster():
     finally:
         cluster.shutdown()
 
-# Case: merge tree to merge tree
-def test_modify_engine_merge_to_merge(started_cluster):
-    database_name = "test1"
-    ch1.query(
-        database="default",
-        sql="CREATE DATABASE " + database_name,
-    )
-    assert ch1.query(
-        database=database_name,
-        sql="SHOW TABLES",
-    ).strip() == ""
 
-    ch1.query(
-        database=database_name,
-        sql="CREATE TABLE foo ( A Int64, D Date, S String ) ENGINE MergeTree() PARTITION BY toYYYYMM(D) ORDER BY A;",
+def q(node, query):
+    return node.query(database=database_name, sql=query)
+
+
+def create_tables():
+    # MergeTree table that will be converted
+    q(
+        ch1,
+        "CREATE TABLE rmt ( A Int64, D Date, S String ) ENGINE MergeTree() PARTITION BY toYYYYMM(D) ORDER BY A;",
     )
 
-    ch1.query(
-        database=database_name,
-        sql="INSERT INTO foo SELECT number, today(), '' FROM numbers(1e2);",
-    )
-    ch1.query(
-        database=database_name,
-        sql="INSERT INTO foo SELECT number, today()-60, '' FROM numbers(1e2);",
-    )
+    q(ch1, "INSERT INTO rmt SELECT number, today(), '' FROM numbers(1e6);")
+    q(ch1, "INSERT INTO rmt SELECT number, today()-60, '' FROM numbers(1e5);")
 
-    ch1.query(
-        database=database_name,
-        sql="ALTER TABLE foo MODIFY ENGINE MergeTree PARTITION BY toYYYYMM(D) ORDER BY A;",
+    # ReplacingMergeTree table that will be converted to check unusual engine kinds
+    q(
+        ch1,
+        "CREATE TABLE replacing ( A Int64, D Date, S String ) ENGINE ReplacingMergeTree() PARTITION BY toYYYYMM(D) ORDER BY A;",
     )
 
-    #Check tables exists
-    assert ch1.query(
-        database=database_name,
-        sql="SHOW TABLES",
-    ).strip() == "foo\nfoo_old"
+    q(ch1, "INSERT INTO replacing SELECT number, today(), '' FROM numbers(1e6);")
+    q(ch1, "INSERT INTO replacing SELECT number, today()-60, '' FROM numbers(1e5);")
 
-    #Check engines
-    assert ch1.query(
-        database=database_name,
-        sql=f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'foo' OR name = 'foo_old')",
-    ).strip() == "foo\tMergeTree\nfoo_old\tMergeTree"
-
-    #Check values
-    assert ch1.query(
-        database=database_name,
-        sql="SELECT count() FROM foo",
-    ).strip() == "200"
-
-# Case: replicated to merge tree
-def test_modify_engine_replicated_to_merge(started_cluster):
-    database_name = "test2"
-    ch1.query(
-        database="default",
-        sql="CREATE DATABASE " + database_name,
-    )
-    assert ch1.query(
-        database=database_name,
-        sql="SHOW TABLES",
-    ).strip() == ""
-
-    ch1.query(
-        database=database_name,
-        sql="CREATE TABLE foo ( A Int64, D Date, S String ) ENGINE ReplicatedMergeTree('/clickhouse/cluster/tables/{database}/{table}/{shard}','{replica}') PARTITION BY toYYYYMM(D) ORDER BY A;",
+    # MergeTree table that will be converted to MergeTree
+    q(
+        ch1,
+        "CREATE TABLE mt ( A Int64, D Date, S String ) ENGINE MergeTree() PARTITION BY toYYYYMM(D) ORDER BY A;",
     )
 
-    ch1.query(
-        database=database_name,
-        sql="INSERT INTO foo SELECT number, today(), '' FROM numbers(1e2);",
-    )
-    ch1.query(
-        database=database_name,
-        sql="INSERT INTO foo SELECT number, today()-60, '' FROM numbers(1e2);",
-    )
+    # Not MergeTree table to check it will not be converted
+    q(ch1, "CREATE TABLE log ( A Int64, D Date, S String ) ENGINE Log;")
 
-    ch1.query(
-        database=database_name,
-        sql="ALTER TABLE foo MODIFY ENGINE MergeTree PARTITION BY toYYYYMM(D) ORDER BY A;",
+
+def convert_tables():
+    q(
+        ch1,
+        "ALTER TABLE rmt MODIFY ENGINE TO REPLICATED",
     )
 
-    #Check tables exists
-    assert ch1.query(
-        database=database_name,
-        sql="SHOW TABLES",
-    ).strip() == "foo\nfoo_old"
-
-    #Check engines
-    assert ch1.query(
-        database=database_name,
-        sql=f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'foo' OR name = 'foo_old')",
-    ).strip() == "foo\tMergeTree\nfoo_old\tReplicatedMergeTree"
-
-    #Check values
-    assert ch1.query(
-        database=database_name,
-        sql="SELECT count() FROM foo",
-    ).strip() == "200"
-
-# Case: merge tree to replicated
-def test_modify_engine_merge_to_replicated(started_cluster):
-    database_name = "test"
-    ch1.query(
-        database="default",
-        sql="CREATE DATABASE " + database_name,
-    )
-    assert ch1.query(
-        database=database_name,
-        sql="SHOW TABLES",
-    ).strip() == ""
-
-    ch1.query(
-        database=database_name,
-        sql="CREATE TABLE foo ( A Int64, D Date, S String ) ENGINE MergeTree PARTITION BY toYYYYMM(D) ORDER BY A;",
+    q(
+        ch1,
+        "ALTER TABLE replacing MODIFY ENGINE TO REPLICATED",
     )
 
-    ch1.query(
-        database=database_name,
-        sql="INSERT INTO foo SELECT number, today(), '' FROM numbers(1e2);",
-    )
-    ch1.query(
-        database=database_name,
-        sql="INSERT INTO foo SELECT number, today()-60, '' FROM numbers(1e2);",
-    )
 
-    ch1.query(
-        database=database_name,
-        sql="ALTER TABLE foo MODIFY ENGINE ReplicatedMergeTree('/clickhouse/cluster/tables/{database}/{table}/{shard}','{replica}') PARTITION BY toYYYYMM(D) ORDER BY A;",
+def check_tables_converted():
+    # Check tables exists
+    assert (
+        q(
+            ch1,
+            "SHOW TABLES",
+        ).strip()
+        == "log\nmt\nreplacing\nrmt"
     )
 
-    #Check tables exists
-    assert ch1.query(
-        database=database_name,
-        sql="SHOW TABLES",
-    ).strip() == "foo\nfoo_old"
+    # Check engines
+    assert (
+        q(
+            ch1,
+            f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name != 'log' AND name != 'mt')",
+        ).strip()
+        == f"replacing\tReplicatedReplacingMergeTree\nrmt\tReplicatedMergeTree"
+    )
+    assert (
+        q(
+            ch1,
+            f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'log' OR name = 'mt')",
+        ).strip()
+        == "log\tLog\nmt\tMergeTree"
+    )
 
-    #Check engines
-    assert ch1.query(
-        database=database_name,
-        sql=f"SELECT name, engine FROM system.tables WHERE database = '{database_name}' AND (name = 'foo' OR name = 'foo_old')",
-    ).strip() == "foo\tReplicatedMergeTree\nfoo_old\tMergeTree"
+    # Check values
+    for table in ["rmt", "replacing"]:
+        assert (
+            q(
+                ch1,
+                f"SELECT count() FROM {table}",
+            ).strip()
+            == "1100000"
+        )
 
-    #Check values
-    assert ch1.query(
-        database=database_name,
-        sql="SELECT count() FROM foo",
-    ).strip() == "200"
+
+def check_replica_added():
+    # Add replica to check if zookeeper path is correct and consistent with table uuid
+
+    uuid = q(
+        ch1,
+        f"SELECT uuid FROM system.tables WHERE table = 'rmt' AND database = '{database_name}'",
+    ).strip()
+
+    q(
+        ch2,
+        f"CREATE TABLE rmt ( A Int64, D Date, S String ) ENGINE ReplicatedMergeTree('/clickhouse/tables/{uuid}/{{shard}}', '{{replica}}') PARTITION BY toYYYYMM(D) ORDER BY A",
+    )
+
+    ch2.query(database=database_name, sql="SYSTEM SYNC REPLICA rmt", timeout=20)
+
+    # Check values
+    assert (
+        q(
+            ch2,
+            f"SELECT count() FROM rmt",
+        ).strip()
+        == "1100000"
+    )
+
+
+def test_modify_engine(started_cluster):
+    ch1.query("CREATE DATABASE " + database_name + " ON CLUSTER cluster")
+
+    create_tables()
+
+    convert_tables()
+
+    check_tables_converted()
+
+    # Restart to check that tables are loaded correctly from new metadata
+    ch1.restart_clickhouse()
+
+    check_tables_converted()
+
+    check_replica_added()

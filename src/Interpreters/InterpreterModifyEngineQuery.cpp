@@ -1,23 +1,30 @@
 #include <Interpreters/InterpreterModifyEngineQuery.h>
 
 #include <Databases/IDatabase.h>
+#include <Databases/DatabaseOnDisk.h>
 #include <Parsers/ASTModifyEngineQuery.h>
 #include <Interpreters/AddDefaultDatabaseVisitor.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/FunctionNameNormalizer.h>
 #include <Interpreters/QueryLog.h>
 #include <Interpreters/executeQuery.h>
-#include <Interpreters/TableEngineModifier.h>
 #include <Interpreters/executeDDLQueryOnCluster.h>
 #include <Storages/StorageMergeTree.h>
 #include <Storages/StorageReplicatedMergeTree.h>
 #include <Storages/IStorage.h>
 #include <Storages/StorageFactory.h>
+#include "Common/escapeForFileName.h"
+#include "Common/logger_useful.h"
 #include <Common/Exception.h>
 #include <Common/typeid_cast.h>
+#include "Interpreters/DatabaseCatalog.h"
 #include "Parsers/ASTCreateQuery.h"
+#include "Parsers/ParserCreateQuery.h"
+#include "Parsers/parseQuery.h"
+#include "Parsers/queryToString.h"
 #include <Access/Common/AccessType.h>
 
+#include <boost/algorithm/string/replace.hpp>
 #include <fmt/core.h>
 
 
@@ -48,84 +55,122 @@ BlockIO InterpreterModifyEngineQuery::execute()
     if (query.cluster.empty())
     {
         auto table_id = getContext()->resolveStorageID(query, Context::ResolveOrdinary);
-        query_ptr->as<ASTModifyEngineQuery &>().setDatabase(table_id.database_name);
-        StoragePtr table = DatabaseCatalog::instance().tryGetTable(table_id, getContext());
+
         DatabasePtr database = DatabaseCatalog::instance().getDatabase(table_id.database_name);
 
-        getContext()->checkAccess(getRequiredAccess());
-
-        if (!table)
-            throw Exception(ErrorCodes::UNKNOWN_TABLE, "Could not find table: {}", table_id.table_name);
-
-        TableEngineModifier::setReadonly(table, true);
+        {
+            StoragePtr table = DatabaseCatalog::instance().tryGetTable(table_id, getContext());
+            if (!table)
+                throw Exception(ErrorCodes::UNKNOWN_TABLE, "Could not find table: {}", table_id.table_name);
+        }
 
         try {
-            checkEngineChangeIsPossible(table);
+            //auto * log = &Poco::Logger::get("InterpreterModifyEngineQuery");
 
-            /// Add default database to table identifiers that we can encounter in e.g. default expressions, mutation expression, etc.
-            AddDefaultDatabaseVisitor visitor(getContext(), table_id.getDatabaseName());
-            visitor.visit(query_ptr);
+            /// Detach table
+            String detach_query = fmt::format("DETACH TABLE {} SYNC", table_id.getFullTableName());
+            auto res = executeQuery(detach_query, getContext(), { .internal=true });
+            executeTrivialBlockIO(res.second, getContext());
 
-            /// Entity names
-            String database_name = (database) ? database->getDatabaseName() : "default";
-            String table_name = query.getTable();
-            /// TODO: Make sure name is unique
-            String table_name_temp = fmt::format("{0}_temp", table_name);
 
-            DDLGuardPtr ddl_guard = DatabaseCatalog::instance().getDDLGuard(database_name, table_name);
-            DDLGuardPtr ddl_guard_temp = DatabaseCatalog::instance().getDDLGuard(database_name, table_name_temp);
+            /// Get attach query from metadata
+            auto ast = database->getCreateTableQuery(table_id.getTableName(), getContext());
+            auto * create_query = ast->as<ASTCreateQuery>();
+            auto * old_storage = create_query->storage;
 
-            /// Create table
-            auto engine_modifier = std::make_unique<TableEngineModifier>(table_name, database_name, getContext());
-            engine_modifier->createTable(query_ptr);
+            DatabaseCatalog::instance().removeUUIDMapping(create_query->uuid);
 
-            /// Rename tables
-            engine_modifier->renameTable();
+            if (query.to_replicated)
+            {
+                /// Check if 'uuid' macro is used in arguments and set it explicitly
+                /// because it is forbidden to use this macro without 'ON CLUSTER'
+                String replica_path = getContext()->getConfigRef().getString("default_replica_path", "/clickhouse/tables/{uuid}/{shard}");
+                replica_path = boost::algorithm::replace_all_copy(replica_path, "{uuid}", fmt::format("{}", create_query->uuid));
+                String replica_name = getContext()->getConfigRef().getString("default_replica_name", "{replica}");
+                String replicated_args = fmt::format("('{}', '{}')", replica_path, replica_name);
+                String replicated_engine = "ENGINE = Replicated" + old_storage->engine->name + replicated_args;
 
-            /// Attach partitions
-            engine_modifier->attachAllPartitionsToTable();
+                ParserStorage parser_storage{ParserStorage::TABLE_ENGINE};
+                auto replicated_storage_ast = parseQuery(parser_storage, replicated_engine, 0, DBMS_DEFAULT_MAX_PARSER_DEPTH);
+                auto * replicated_storage = replicated_storage_ast->as<ASTStorage>();
 
-            TableEngineModifier::setReadonly(table, false);
-            
-            ddl_guard.reset();
-            ddl_guard_temp.reset();
+                /// Add old engine's arguments if any
+                if (old_storage->engine->arguments)
+                {
+                    for (size_t i = 0; i < old_storage->engine->arguments->children.size(); ++i)
+                        replicated_storage->engine->arguments->children.push_back(old_storage->engine->arguments->children[i]->clone());
+                }
+
+                /// Set new engine for the old query
+                create_query->set(create_query->storage->engine, replicated_storage->engine->clone());
+            }
+            else {
+                /// Replicated to regular
+
+            }
+
+            /// Change metadata
+            auto table_metadata_path = database->getObjectMetadataPath(table_id.getTableName());//fs::path(database->getMetadataPath()) / (escapeForFileName(table_id.getTableName()) + ".sql");
+            auto table_metadata_tmp_path = table_metadata_path + ".tmp";
+            String statement = getObjectDefinitionFromCreateQuery(ast);
+            {
+                WriteBufferFromFile out(table_metadata_tmp_path, statement.size(), O_WRONLY | O_CREAT | O_EXCL);
+                writeString(statement, out);
+                out.next();
+                if (getContext()->getSettingsRef().fsync_metadata)
+                    out.sync();
+                out.close();
+            }
+            fs::rename(table_metadata_tmp_path, table_metadata_path);
+
+            /// Attach table
+            String attach_query = fmt::format("ATTACH TABLE {}", table_id.getFullTableName());
+            res = executeQuery(attach_query, getContext(), { .internal=true });
+            executeTrivialBlockIO(res.second, getContext());
+
+            /// If engine is ReplicatedMergeTree, restore metadata in zk
+            if (query.to_replicated)
+            {
+                String restore_query = fmt::format("SYSTEM RESTORE REPLICA {}", table_id.getFullTableName());
+                res = executeQuery(restore_query, getContext(), { .internal=true });
+                executeTrivialBlockIO(res.second, getContext());
+            }
+
         } catch (...) {
-            TableEngineModifier::setReadonly(table, false);
             throw;
         }
-    } 
+    }
     else
     {
-        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine on cluster is not implemented yet.");
         /// Doesn't work correctly if converting to replicated while tables on other hosts aren't empty
-        /// TODO: Attach only on one host?
+        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine on cluster is not implemented.");
     }
 
     return {};
 }
 
-void InterpreterModifyEngineQuery::checkEngineChangeIsPossible(StoragePtr table)
+void InterpreterModifyEngineQuery::checkEngineChangeIsPossible(StoragePtr)
 {
-    String target_engine_name = query_ptr->as<ASTModifyEngineQuery &>().storage->as<ASTStorage &>().engine->name;
+    // String target_engine_name = query_ptr->as<ASTModifyEngineQuery &>().storage->as<ASTStorage &>().engine->name;
 
-    if (auto table_merge_tree = dynamic_pointer_cast<StorageMergeTree>(table))
-    {
-        if (target_engine_name != "MergeTree" && target_engine_name != "ReplicatedMergeTree")
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Converting from MergeTree to {} is not implemented", target_engine_name);
-        auto unfinished_mutations = table_merge_tree->getUnfinishedMutationCommands();
-        if (!unfinished_mutations.empty())
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited");
-    }
-    else if (auto table_replicated_merge_tree = dynamic_pointer_cast<StorageReplicatedMergeTree>(table))
-    {
-        if (target_engine_name != "MergeTree" && target_engine_name != "ReplicatedMergeTree")
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Converting from ReplicatedMergeTree to {} is not implemented", target_engine_name);
-        auto unfinished_mutations = table_replicated_merge_tree->getUnfinishedMutationCommands();
-        if (!unfinished_mutations.empty())
-            throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited");
-    }
-    else
-        throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Only MergeTree family tables are supported");
+    // if (auto table_merge_tree = dynamic_pointer_cast<StorageMergeTree>(table))
+    // {
+    //     if (target_engine_name != "MergeTree" && target_engine_name != "ReplicatedMergeTree")
+    //         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Converting from MergeTree to {} is not implemented", target_engine_name);
+    //     auto unfinished_mutations = table_merge_tree->getUnfinishedMutationCommands();
+    //     if (!unfinished_mutations.empty())
+    //         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited");
+    // }
+    // else if (auto table_replicated_merge_tree = dynamic_pointer_cast<StorageReplicatedMergeTree>(table))
+    // {
+    //     if (target_engine_name != "MergeTree" && target_engine_name != "ReplicatedMergeTree")
+    //         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Converting from ReplicatedMergeTree to {} is not implemented", target_engine_name);
+    //     auto unfinished_mutations = table_replicated_merge_tree->getUnfinishedMutationCommands();
+    //     if (!unfinished_mutations.empty())
+    //         throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Modify engine while there are unfinished mutations left is prohibited");
+    // }
+    // else
+    //     throw Exception(ErrorCodes::NOT_IMPLEMENTED, "Only MergeTree family tables are supported");
 }
 
 AccessRightsElements InterpreterModifyEngineQuery::getRequiredAccess() const
@@ -144,13 +189,13 @@ AccessRightsElements InterpreterModifyEngineQuery::getRequiredAccess() const
     required_access.emplace_back(AccessType::CREATE_TABLE | AccessType::INSERT, query.getDatabase(), query.getTable());
     required_access.emplace_back(AccessType::CREATE_TABLE | AccessType::INSERT, query.getDatabase(), temp_name);
 
-    if (query.storage)
-    {
-        auto & storage = query.storage->as<ASTStorage &>();
-        auto source_access_type = StorageFactory::instance().getSourceAccessType(storage.engine->name);
-        if (source_access_type != AccessType::NONE)
-            required_access.emplace_back(source_access_type);
-    }
+    // if (query.storage)
+    // {
+    //     auto & storage = query.storage->as<ASTStorage &>();
+    //     auto source_access_type = StorageFactory::instance().getSourceAccessType(storage.engine->name);
+    //     if (source_access_type != AccessType::NONE)
+    //         required_access.emplace_back(source_access_type);
+    // }
 
     return required_access;
 }
