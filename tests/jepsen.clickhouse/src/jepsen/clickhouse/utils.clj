@@ -70,7 +70,7 @@
   (info "Downloading clickhouse from" source)
   (cond
     (clojure.string/starts-with? source "http") (get-clickhouse-url source)
-    (.exists (io/file source)) (get-clickhouse-scp source root-folder)
+    (.exists (io/file source)) (get-clickhouse-scp source)
     :else (throw (Exception. (str "Don't know how to download clickhouse from" source)))))
 
 (defn unpack-deb
@@ -99,8 +99,8 @@
 (defn install-downloaded-clickhouse
   [path]
   (cond
-    (clojure.string/ends-with? path ".deb") (unpack-deb path root-folder)
-    (clojure.string/ends-with? path ".tgz") (unpack-tgz path root-folder)
+    (clojure.string/ends-with? path ".deb") (unpack-deb path)
+    (clojure.string/ends-with? path ".tgz") (unpack-tgz path)
     (clojure.string/ends-with? path "clickhouse") (chmod-binary path)
     :else (throw (Exception. (str "Don't know how to install clickhouse from path" path)))))
 
