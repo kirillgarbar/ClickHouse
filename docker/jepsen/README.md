@@ -27,12 +27,32 @@ locally by running using `bin/web`. This can be a handy way to browse test
 results.
 
 
-## Run ClickHouse test
+## Run ClickHouse Keeper test
 
 ```sh
 sudo ./bin/console
 
 cd jepsen.clickhouse
 
-lein run test --nodes n1,n2,n3 --username root --password '' --time-limit 30 --concurrency 50 -r 50 --workload set --nemesis logs-and-snapshots-corruptor  --clickhouse-source '/usr/bin/clickhouse' -q --test-count 10 --reuse-binary
+lein run test --nodes n1,n2,n3 --username root --password '' --time-limit 30 --concurrency 50 -r 50 --workload set --nemesis logs-and-snapshots-corruptor  --clickhouse-source '/usr/bin/clickhouse' -q --test-count 1 --reuse-binary
+```
+
+## Run ClickHouse Server test
+
+```sh
+sudo ./bin/console
+
+cd jepsen.clickhouse
+
+lein run server test --nodes n1,n2,n3 --username root --password '' --time-limit 30 --concurrency 50 -r 50 --workload set --nemesis random-node-killer  --clickhouse-source '/usr/bin/clickhouse' --test-count 1 --reuse-binary
+```
+
+## Run ClickHouse Server zero-copy test
+
+```sh
+sudo ./bin/console
+
+cd jepsen.clickhouse
+
+lein run server test --nodes n1,n2,n3 --keeper n4 --minio n5 --username root --password '' --time-limit 30 --concurrency 50 -r 50 --workload set --nemesis random-node-killer  --clickhouse-source '/usr/bin/clickhouse' --test-count 1 --reuse-binary
 ```

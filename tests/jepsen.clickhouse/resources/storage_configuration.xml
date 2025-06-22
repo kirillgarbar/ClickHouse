@@ -1,0 +1,36 @@
+<clickhouse>
+	<storage_configuration>
+		<disks>
+			<s3>
+				<type>s3</type>
+				<!-- TODO: custom node -->
+				<endpoint>http://n5:9000/cloud-storage/data/</endpoint>
+				<access_key_id>minioadmin</access_key_id>
+				<secret_access_key>minioadmin</secret_access_key>
+			</s3>
+		</disks>
+
+		<policies>
+			<s3>
+				<volumes>
+					<main>
+						<disk>s3</disk>
+					</main>
+				</volumes>
+				<move_factor>0.0</move_factor> <!-- Disable automatic moves -->
+			</s3>
+
+			<s3_cold>
+				<volumes>
+					<main>
+						<disk>default</disk>
+					</main>
+					<external>
+						<disk>s3</disk>
+					</external>
+				</volumes>
+				<move_factor>0.0</move_factor> <!-- Disable automatic moves -->
+			</s3_cold>
+		</policies>
+	</storage_configuration>
+</clickhouse>

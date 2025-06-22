@@ -6,13 +6,6 @@
         <replica>{replica_name}</replica>
     </macros>
 
-    <logger>
-        <level>information</level>
-        <log>/var/log/clickhouse-keeper/clickhouse-keeper.log</log>
-        <errorlog>/var/log/clickhouse-keeper/clickhouse-keeper.err.log</errorlog>
-        <size>never</size>
-    </logger>
-
     <zookeeper>
         <node>
             <host>{keeper}</host>

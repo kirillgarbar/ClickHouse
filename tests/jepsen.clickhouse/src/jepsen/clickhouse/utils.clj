@@ -118,12 +118,16 @@
           (clickhouse-alive? node test) true
           :else (do (Thread/sleep 1000) (recur (inc i))))))
 
+(defn kill-daemon!
+  [binary-name]
+  (c/su
+   (cu/stop-daemon! (str root-folder "/" binary-name) pid-file-path)
+   (c/exec :rm :-fr (str data-dir "/status"))))
+
 (defn kill-clickhouse!
   [node test]
   (info "Killing server on node" node)
-  (c/su
-   (cu/stop-daemon! binary-path pid-file-path)
-   (c/exec :rm :-fr (str data-dir "/status"))))
+  (kill-daemon! binary-name))
 
 (defn start-clickhouse!
   [node test clickhouse-alive? & binary-args]

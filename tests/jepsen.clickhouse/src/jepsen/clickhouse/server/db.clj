@@ -48,6 +48,9 @@
 
 (defn install-configs
   [test node]
+  (let [minio-node (:minio test)]
+      (when (not (str/blank? minio-node))
+        (c/exec :echo (slurp (io/resource "storage_configuration.xml")) :> (str sub-configs-dir "/storage_configuration.xml"))))
   (c/exec :echo (slurp (io/resource "config.xml")) :> (str configs-dir "/config.xml"))
   (c/exec :echo (slurp (io/resource "users.xml")) :> (str configs-dir "/users.xml"))
   (c/exec :echo (replicated-merge-tree-config test node (slurp (io/resource "replicated_merge_tree.xml"))) :> (str sub-configs-dir "/replicated_merge_tree.xml")))
@@ -69,7 +72,34 @@
 
 (defn keeper
   [version reuse-binary]
-  (chu/db version reuse-binary keeperutils/start-clickhouse! install-keeper-configs))
+  (chu/db version reuse-binary keeperutils/start-keeper-solo! install-keeper-configs))
+
+(defn minio-alive?
+  [node test]
+  (info "Checking Minio alive on" node)
+  (try
+    (c/exec (str root-folder "/mc") :alias :set "'myminio'" "'http://localhost:9000'" "'minioadmin'" "'minioadmin'")
+    (catch Exception _ false)))
+
+(defn setup-minio
+  [test minio-node]
+  (chu/prepare-dirs)
+  (chu/non-precise-cached-wget! "https://dl.min.io/server/minio/release/linux-amd64/minio")
+  (chu/non-precise-cached-wget! "https://dl.min.io/client/mc/release/linux-amd64/mc")
+  (chu/chmod-binary (str root-folder "/minio"))
+  (chu/chmod-binary (str root-folder "/mc"))
+  (c/su
+   (cu/start-daemon!
+    {:pidfile pid-file-path
+     :chdir root-folder
+     :logfile stderr-file}
+    (str root-folder "/minio")
+    "server"
+    (str data-dir "/data")))
+  (chu/wait-clickhouse-alive! minio-node test minio-alive?)
+  (c/exec (str root-folder "/mc") :alias :set "'myminio'" "'http://localhost:9000'" "'minioadmin'" "'minioadmin'")
+  (c/exec (str root-folder "/mc") :mb :-p "myminio/cloud-storage")
+  )
 
 (defn snarf-keeper-logs!
   "Downloads Keeper logs"
@@ -122,12 +152,18 @@
   [version reuse-binary]
   (reify db/DB
     (setup! [this test node]
-      (let [keeper-node (:keeper test)]
+      (let [keeper-node (:keeper test)
+            minio-node (:minio test)]
         (when (is-primary test node)
           (info (str "Starting Keeper on " keeper-node))
-          (c/on keeper-node 
-            (os/setup! (:os test) test keeper-node) 
-            (db/setup! (keeper version reuse-binary) test keeper-node)))
+          (c/on keeper-node
+                (os/setup! (:os test) test keeper-node)
+                (db/setup! (keeper version reuse-binary) test keeper-node))
+          (when (not (str/blank? minio-node))
+            (info (str "Starting Minio on " minio-node))
+            (c/on minio-node
+                  (os/setup! (:os test) test minio-node)
+                  (setup-minio test minio-node))))
         (c/su
          (do
            (info "Preparing directories")
@@ -145,12 +181,16 @@
            (info "ClickHouse started")))))
 
     (teardown! [_ test node]
-      (let [keeper-node (:keeper test)]
+      (let [keeper-node (:keeper test)
+            minio-node (:minio test)]
         (when (is-primary test node)
           (info (str "Tearing down Keeper on " keeper-node))
-          (c/on keeper-node 
-            (db/teardown! (keeper version reuse-binary) test keeper-node))
-            (os/teardown! (:os test) test keeper-node)))
+          (c/on keeper-node
+                (db/teardown! (keeper version reuse-binary) test keeper-node))
+          (os/teardown! (:os test) test keeper-node)
+          (when (not (str/blank? minio-node))
+            (info (str "Tearing down Minio on " minio-node))
+            (chu/kill-daemon! "minio")))) ;TODO: proper teardown
       (info node "Tearing down clickhouse")
       (c/su
        (chu/kill-clickhouse! node test)
@@ -172,7 +212,7 @@
          (do
            (info node "Data folder exists, going to compress")
            (c/cd root-folder
-            (c/exec :tar :czf "data.tar.gz" "db"))))
+                 (c/exec :tar :czf "data.tar.gz" "db"))))
        (if (cu/exists? (str logs-dir))
          (do
            (info node "Logs exist, going to compress")

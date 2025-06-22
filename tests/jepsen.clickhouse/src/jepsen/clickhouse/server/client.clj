@@ -22,7 +22,7 @@
    (util/timeout 30000
                (throw (RuntimeException.
                         (str "Connection to " node " timed out")))
-    (util/retry 0.1
+    (util/retry 1
       (let [spec (db-spec node)
             connection (j/get-connection spec)
             added-connection (j/add-connection spec connection)]

@@ -38,5 +38,6 @@ RUN apt-get -qy update && \
     apt-get -qy install \
         build-essential bzip2 ca-certificates curl dirmngr dnsutils faketime iproute2 iptables iputils-ping libzip4 logrotate lsb-release man man-db netcat-openbsd net-tools ntpdate psmisc python3 rsyslog sudo tar tcpdump unzip vim wget
 
-EXPOSE 22
+# 9000 can be used by minio
+EXPOSE 22 9000
 CMD ["/usr/local/bin/boot-debian-base"]

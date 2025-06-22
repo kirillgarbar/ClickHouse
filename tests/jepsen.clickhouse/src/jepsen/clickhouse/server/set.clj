@@ -11,7 +11,7 @@
    [jepsen.clickhouse.server.client :as chc]
    [jepsen.clickhouse.utils :as chu]))
 
-(defrecord SetClient [table-created? conn]
+(defrecord SetClient [table-created? conn zero-copy?]
   client/Client
   (open! [this test node]
     (assoc this :conn (chc/client node)))
@@ -21,7 +21,10 @@
       (when (compare-and-set! table-created? false true)
         (chc/with-connection [c conn] false
           (j/query c "DROP TABLE IF EXISTS set ON CLUSTER test_cluster")
-          (j/query c "CREATE TABLE set ON CLUSTER test_cluster (value Int64) Engine=ReplicatedMergeTree ORDER BY value")))))
+          (let [create-query "CREATE TABLE set ON CLUSTER test_cluster (value Int64) Engine=ReplicatedMergeTree ORDER BY value"]
+            (if zero-copy?
+              (j/query c (str create-query " SETTINGS allow_remote_fs_zero_copy_replication=1,storage_policy='s3'"))
+              (j/query c create-query)))))))
 
   (invoke! [this test op]
     (chc/with-exception op
@@ -42,10 +45,21 @@
 (defn workload
   "A generator, client, and checker for a set test."
   [opts]
-  {:client    (SetClient. (atom false) nil)
+  {:client    (SetClient. (atom false) nil false)
    :checker   (checker/compose
                 {:set (checker/set)
                  :perf (checker/perf)})
+   :generator (->> (range)
+                   (map (fn [x] {:type :invoke, :f :add, :value x})))
+   :final-generator (gen/once {:type :invoke, :f :read, :value nil})})
+
+(defn workload-zero-copy
+  "A generator, client, and checker for a set test."
+  [opts]
+  {:client    (SetClient. (atom false) nil true)
+   :checker   (checker/compose
+               {:set (checker/set)
+                :perf (checker/perf)})
    :generator (->> (range)
                    (map (fn [x] {:type :invoke, :f :add, :value x})))
    :final-generator (gen/once {:type :invoke, :f :read, :value nil})})

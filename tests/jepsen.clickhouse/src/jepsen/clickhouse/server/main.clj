@@ -17,13 +17,15 @@
             [jepsen.control.util :as cu]
             [jepsen.os.ubuntu :as ubuntu]
             [jepsen.checker.timeline :as timeline]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [jepsen.clickhouse.server.set :as set])
   (:import (ch.qos.logback.classic Level)
            (org.slf4j Logger LoggerFactory)))
 
 (def workloads
   "A map of workload names to functions that construct workloads, given opts."
-   {"set" set/workload})
+   {"set" set/workload
+    "set-zero-copy" set/workload-zero-copy})
 
 (def cli-opts
   "Additional command line options."
@@ -33,6 +35,8 @@
    [nil "--keeper ADDRESS", "Address of a Keeper instance"
     :default ""
     :validate [#(not-empty %) "Address for Keeper cannot be empty"]]
+   [nil "--minio ADDRESS", "Address of a Minio instance"
+    :default ""]
    [nil "--nemesis NAME" "Which nemesis will poison our lives?"
     :default "random-node-killer"
     :validate [ch-nemesis/custom-nemeses (cli/one-of ch-nemesis/custom-nemeses)]]

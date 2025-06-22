@@ -151,3 +151,15 @@
     :--keeper_server.log_storage_disk "log_local"
     :--keeper_server.latest_log_storage_disk "latest_log_local"
     :--path coordination-data-dir))
+
+(defn start-keeper-solo!
+  [node test]
+  (info "Starting solo server on node" node)
+  (chu/start-clickhouse!
+    node
+    test
+    clickhouse-alive?
+    :keeper
+    :--config (str configs-dir "/keeper_config.xml")
+    :--
+    :--path coordination-data-dir))

@@ -11,7 +11,7 @@ You are currently in the base dir of the git repo for Jepsen.
 If you modify the core jepsen library make sure you "lein install" it so other tests can access.
 
 To run a test:
-   cd etcd && lein run test --concurrency 10
+   lein run server test --nodes n1,n2,n3 --keeper n4 --minio n5 --username root --password '' --time-limit 30 --concurrency 50 -r 50 --workload set-zero-copy --nemesis random-node-killer  --clickhouse-source '/usr/bin/clickhouse' --test-count 1 --reuse-binary
 EOF
 
-cd /jepsen
+cd /jepsen.clickhouse
