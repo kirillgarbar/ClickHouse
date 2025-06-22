@@ -36,24 +36,25 @@
             [jepsen.clickhouse.keeper.utils :as keeperutils]
             [jepsen.clickhouse.utils :as chu]))
 
-(defn replicated-merge-tree-config
+(defn config-from-template
   [test node config-template]
   (let [nodes (:nodes test)
         replacement-map {#"\{server1\}" (get nodes 0)
                          #"\{server2\}" (get nodes 1)
                          #"\{server3\}" (get nodes 2)
                          #"\{keeper\}" (:keeper test)
-                         #"\{replica_name\}" node}]
+                         #"\{replica_name\}" node
+                         #"\{minio}" (:minio test)}]
     (reduce #(clojure.string/replace %1 (get %2 0) (get %2 1)) config-template replacement-map)))
 
 (defn install-configs
   [test node]
   (let [minio-node (:minio test)]
       (when (not (str/blank? minio-node))
-        (c/exec :echo (slurp (io/resource "storage_configuration.xml")) :> (str sub-configs-dir "/storage_configuration.xml"))))
+        (c/exec :echo (config-from-template test node (slurp (io/resource "storage_configuration.xml"))) :> (str sub-configs-dir "/storage_configuration.xml"))))
   (c/exec :echo (slurp (io/resource "config.xml")) :> (str configs-dir "/config.xml"))
   (c/exec :echo (slurp (io/resource "users.xml")) :> (str configs-dir "/users.xml"))
-  (c/exec :echo (replicated-merge-tree-config test node (slurp (io/resource "replicated_merge_tree.xml"))) :> (str sub-configs-dir "/replicated_merge_tree.xml")))
+  (c/exec :echo (config-from-template test node (slurp (io/resource "replicated_merge_tree.xml"))) :> (str sub-configs-dir "/replicated_merge_tree.xml")))
 
 (defn extra-setup
   [test node]
@@ -212,7 +213,7 @@
          (do
            (info node "Data folder exists, going to compress")
            (c/cd root-folder
-                 (c/exec :tar :czf "data.tar.gz" "db"))))
+            (c/exec :tar :czf "data.tar.gz" "db"))))
        (if (cu/exists? (str logs-dir))
          (do
            (info node "Logs exist, going to compress")

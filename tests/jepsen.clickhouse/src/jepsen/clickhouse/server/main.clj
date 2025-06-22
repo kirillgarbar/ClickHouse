@@ -17,7 +17,6 @@
             [jepsen.control.util :as cu]
             [jepsen.os.ubuntu :as ubuntu]
             [jepsen.checker.timeline :as timeline]
-            [clojure.java.io :as io]
             [jepsen.clickhouse.server.set :as set])
   (:import (ch.qos.logback.classic Level)
            (org.slf4j Logger LoggerFactory)))
