@@ -3,8 +3,7 @@
 		<disks>
 			<s3>
 				<type>s3</type>
-				<!-- TODO: custom node -->
-				<endpoint>http://n5:9000/cloud-storage/data/</endpoint>
+				<endpoint>http://{minio}:9000/cloud-storage/data/</endpoint>
 				<access_key_id>minioadmin</access_key_id>
 				<secret_access_key>minioadmin</secret_access_key>
 			</s3>
