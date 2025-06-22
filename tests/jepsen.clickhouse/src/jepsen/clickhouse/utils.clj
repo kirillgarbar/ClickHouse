@@ -154,6 +154,16 @@
     (c/exec :touch stderr-file)
     (c/exec :chown :-R :root root-folder)))
 
+(defn clear-dirs
+  [reuse-binary]
+  (do
+    (if (not reuse-binary)
+      (c/exec :rm :-rf binary-path))
+    (c/exec :rm :-rf pid-file-path)
+    (c/exec :rm :-rf data-dir)
+    (c/exec :rm :-rf logs-dir)
+    (c/exec :rm :-rf configs-dir)))
+
 (defn db
   [version reuse-binary start-clickhouse! extra-setup]
   (reify db/DB
@@ -176,12 +186,7 @@
       (info node "Tearing down clickhouse")
       (c/su
        (kill-clickhouse! node test)
-       (if (not reuse-binary)
-         (c/exec :rm :-rf binary-path))
-       (c/exec :rm :-rf pid-file-path)
-       (c/exec :rm :-rf data-dir)
-       (c/exec :rm :-rf logs-dir)
-       (c/exec :rm :-rf configs-dir)))
+       (clear-dirs reuse-binary)))
 
     db/LogFiles
     (log-files [_ test node]

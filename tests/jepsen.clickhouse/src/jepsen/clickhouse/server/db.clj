@@ -1,4 +1,6 @@
-(ns jepsen.control.scp)
+(ns jepsen.control.scp 
+  (:require
+    [jepsen.clickhouse.server.minio :as minio]))
 
 ;; We need to overwrite Jepsen's implementation of scp! because it
 ;; doesn't use strict-host-key-checking
@@ -32,6 +34,7 @@
              [db :as db]]
             [jepsen.control.util :as cu]
             [jepsen.clickhouse.constants :refer :all]
+            [jepsen.clickhouse.server.minio :as minio]
             [jepsen.clickhouse.server.utils :refer :all]
             [jepsen.clickhouse.keeper.utils :as keeperutils]
             [jepsen.clickhouse.utils :as chu]))
@@ -74,33 +77,6 @@
 (defn keeper
   [version reuse-binary]
   (chu/db version reuse-binary keeperutils/start-keeper-solo! install-keeper-configs))
-
-(defn minio-alive?
-  [node test]
-  (info "Checking Minio alive on" node)
-  (try
-    (c/exec (str root-folder "/mc") :alias :set "'myminio'" "'http://localhost:9000'" "'minioadmin'" "'minioadmin'")
-    (catch Exception _ false)))
-
-(defn setup-minio
-  [test minio-node]
-  (chu/prepare-dirs)
-  (chu/non-precise-cached-wget! "https://dl.min.io/server/minio/release/linux-amd64/minio")
-  (chu/non-precise-cached-wget! "https://dl.min.io/client/mc/release/linux-amd64/mc")
-  (chu/chmod-binary (str root-folder "/minio"))
-  (chu/chmod-binary (str root-folder "/mc"))
-  (c/su
-   (cu/start-daemon!
-    {:pidfile pid-file-path
-     :chdir root-folder
-     :logfile stderr-file}
-    (str root-folder "/minio")
-    "server"
-    (str data-dir "/data")))
-  (chu/wait-clickhouse-alive! minio-node test minio-alive?)
-  (c/exec (str root-folder "/mc") :alias :set "'myminio'" "'http://localhost:9000'" "'minioadmin'" "'minioadmin'")
-  (c/exec (str root-folder "/mc") :mb :-p "myminio/cloud-storage")
-  )
 
 (defn snarf-keeper-logs!
   "Downloads Keeper logs"
@@ -164,7 +140,7 @@
             (info (str "Starting Minio on " minio-node))
             (c/on minio-node
                   (os/setup! (:os test) test minio-node)
-                  (setup-minio test minio-node))))
+                  (minio/setup-minio! test minio-node))))
         (c/su
          (do
            (info "Preparing directories")
@@ -191,7 +167,7 @@
           (os/teardown! (:os test) test keeper-node)
           (when (not (str/blank? minio-node))
             (info (str "Tearing down Minio on " minio-node))
-            (chu/kill-daemon! "minio")))) ;TODO: proper teardown
+            (minio/teardown-minio! reuse-binary))))
       (info node "Tearing down clickhouse")
       (c/su
        (chu/kill-clickhouse! node test)
