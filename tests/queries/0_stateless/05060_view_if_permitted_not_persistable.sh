@@ -57,6 +57,22 @@ out=$(${CLICKHOUSE_CLIENT} --query "CREATE TABLE ${db}.dst4_05060 AS remote('127
 echo "$out" | grep -m1 -o "cannot be used to create a table"
 echo "$out" | grep -m1 -o "BAD_ARGUMENTS"
 
+# Without a column list the structure is inferred from the table function before the table is
+# created, and that inference has side effects of its own: `remote(...)` connects to the shards and an
+# `ELSE` arm is analyzed. The refusal has to come before any of that, so an unreachable shard must not
+# change the outcome: it is `BAD_ARGUMENTS`, not a connection error, and no source identifier shows up.
+echo "--- refused before the structure is inferred: an unreachable remote(...) shard is never contacted ---"
+out=$(${CLICKHOUSE_CLIENT} --user "$user" --query "CREATE TABLE ${db}.dst7_05060 AS remote('127.0.0.1:1', viewIfPermitted(SELECT * FROM ${db}.src_05060 ELSE null('x UInt64')))" 2>&1)
+echo "$out" | grep -m1 -o "cannot be used to create a table"
+echo "$out" | grep -m1 -oE "BAD_ARGUMENTS|NO_REMOTE_SHARD_AVAILABLE|ALL_CONNECTION_TRIES_FAILED"
+echo "leaked: [$(echo "$out" | leaked)]"
+
+echo "--- and an unreachable remote(...) in the ELSE arm is not analyzed either ---"
+out=$(${CLICKHOUSE_CLIENT} --user "$user" --query "CREATE TABLE ${db}.dst8_05060 AS viewIfPermitted(SELECT * FROM ${db}.src_05060 ELSE remote('127.0.0.1:1', system.one))" 2>&1)
+echo "$out" | grep -m1 -o "cannot be used to create a table"
+echo "$out" | grep -m1 -oE "BAD_ARGUMENTS|NO_REMOTE_SHARD_AVAILABLE|ALL_CONNECTION_TRIES_FAILED"
+echo "leaked: [$(echo "$out" | leaked)]"
+
 # The `AS <table function>` path is not the only carrier of a table function into a persisted
 # definition: the `Remote` / `RemoteSecure` engines store one in `remote_table_function_ptr`. The SQL
 # parser only produces `viewIfPermitted(SELECT ... ELSE ...)` in table-expression position, but the
@@ -109,5 +125,7 @@ ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS ${db}.dst3_05060"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS ${db}.dst4_05060"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS ${db}.dst5_05060"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS ${db}.dst6_05060"
+${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS ${db}.dst7_05060"
+${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS ${db}.dst8_05060"
 ${CLICKHOUSE_CLIENT} --query "DROP TABLE IF EXISTS ${db}.src_05060"
 ${CLICKHOUSE_CLIENT} --query "DROP USER IF EXISTS $user"

@@ -12,6 +12,14 @@ leaked: []
 --- nested through loop(...) inside remote(...) is refused too ---
 cannot be used to create a table
 BAD_ARGUMENTS
+--- refused before the structure is inferred: an unreachable remote(...) shard is never contacted ---
+cannot be used to create a table
+BAD_ARGUMENTS
+leaked: []
+--- and an unreachable remote(...) in the ELSE arm is not analyzed either ---
+cannot be used to create a table
+BAD_ARGUMENTS
+leaked: []
 --- carried in a Remote engine argument through the JSON AST dialect, it is refused too ---
 cannot be used to create a table
 UNKNOWN_TABLE
