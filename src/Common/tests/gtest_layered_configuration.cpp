@@ -86,6 +86,8 @@ TEST(LayeredConfiguration, ReplaceByLabelConcurrentReads)
     std::atomic<bool> stop{false};
     std::atomic<size_t> read_count{0};
     std::atomic<bool> saw_bad_value{false};
+    std::atomic<size_t> readers_saw_replacement{0};
+    std::atomic<size_t> readers_saw_initial{0};
 
     // Spawn reader threads that continuously read from the config.
     constexpr size_t num_readers = 4;
@@ -95,18 +97,35 @@ TEST(LayeredConfiguration, ReplaceByLabelConcurrentReads)
     {
         readers.emplace_back([&]
         {
-            while (!stop.load(std::memory_order_relaxed))
+            bool counted_initial = false;
+            bool counted_replacement = false;
+            do
             {
                 std::string val = lc->getString("key", "missing");
-                // The value should always be either "initial", one of the
-                // replacement values, or "missing" if we hit a transient
-                // between configs. But it should never be corrupted garbage.
-                if (val != "initial" && val != "missing" && !val.starts_with("round_"))
+                // replace() swaps the layer under the same mutex every getString() takes, so a reader always
+                // observes a complete config: "initial" before the first replacement, "round_N" after. Anything
+                // else, including the "missing" default, means the key was not visible and is a defect.
+                if (val != "initial" && !val.starts_with("round_"))
                     saw_bad_value.store(true, std::memory_order_relaxed);
+                if (!counted_initial && val == "initial")
+                {
+                    counted_initial = true;
+                    readers_saw_initial.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (!counted_replacement && val.starts_with("round_"))
+                {
+                    counted_replacement = true;
+                    readers_saw_replacement.fetch_add(1, std::memory_order_relaxed);
+                }
                 read_count.fetch_add(1, std::memory_order_relaxed);
-            }
+            } while (!stop.load(std::memory_order_relaxed));
         });
     }
+
+    // Every reader observes the pre-replacement value before the first replacement below: the value
+    // cannot change while this waits, so each reader reaches the count on its first read.
+    while (readers_saw_initial.load(std::memory_order_relaxed) < num_readers)
+        std::this_thread::yield();
 
     // Writer thread: rapidly replace the config many times.
     constexpr size_t num_replacements = 1000;
@@ -114,6 +133,11 @@ TEST(LayeredConfiguration, ReplaceByLabelConcurrentReads)
     {
         auto new_cfg = makeMapConfig("key", "round_" + std::to_string(i));
         lc->replace("default", new_cfg, 0, true);
+        // Hold here until every reader has observed a replaced value, so the reads interleave with
+        // the replacements instead of all landing after the last one.
+        if (i == 0)
+            while (readers_saw_replacement.load(std::memory_order_relaxed) < num_readers)
+                std::this_thread::yield();
     }
 
     stop.store(true, std::memory_order_relaxed);
@@ -121,7 +145,9 @@ TEST(LayeredConfiguration, ReplaceByLabelConcurrentReads)
         t.join();
 
     EXPECT_FALSE(saw_bad_value.load());
-    EXPECT_GT(read_count.load(), 0u);
+    EXPECT_GE(read_count.load(), num_readers);
+    EXPECT_EQ(num_readers, readers_saw_initial.load());
+    EXPECT_EQ(num_readers, readers_saw_replacement.load());
 
     // After all replacements, the last value should be visible.
     EXPECT_EQ("round_999", lc->getString("key"));
