@@ -34,7 +34,7 @@
           "pages": [
             "products/managed-postgres/extensions/chdb/introduction",
             "products/managed-postgres/extensions/chdb/chdb",
-            "products/managed-postgres/extensions/chdb/chdb-hook"
+            "products/managed-postgres/extensions/chdb/chdb_hook"
           ]
         },
         "products/managed-postgres/upgrades",
