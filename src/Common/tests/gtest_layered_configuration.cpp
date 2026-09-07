@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <thread>
 #include <vector>
 #include <atomic>
@@ -122,22 +123,34 @@ TEST(LayeredConfiguration, ReplaceByLabelConcurrentReads)
         });
     }
 
+    // Bounded, so a config that stops making a value visible fails the assertions after the join
+    // instead of hanging the sequential unit-test binary. 60 s dwarfs the ~100 ms these waits take.
+    // Returns the count reached, for the caller whose counter can still be completed after the loop.
+    auto wait_for_all_readers = [](const std::atomic<size_t> & counter, size_t target)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+        while (counter.load(std::memory_order_relaxed) < target && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+        return counter.load(std::memory_order_relaxed);
+    };
+
     // Every reader observes the pre-replacement value before the first replacement below: the value
-    // cannot change while this waits, so each reader reaches the count on its first read.
-    while (readers_saw_initial.load(std::memory_order_relaxed) < num_readers)
-        std::this_thread::yield();
+    // cannot change while this waits, so each reader reaches the count on its first read. No snapshot
+    // is needed: counting "initial" is only possible before the first replacement lands.
+    wait_for_all_readers(readers_saw_initial, num_readers);
 
     // Writer thread: rapidly replace the config many times.
     constexpr size_t num_replacements = 1000;
+    size_t saw_replacement_in_loop = 0;
     for (size_t i = 0; i < num_replacements; ++i)
     {
         auto new_cfg = makeMapConfig("key", "round_" + std::to_string(i));
         lc->replace("default", new_cfg, 0, true);
-        // Hold here until every reader has observed a replaced value, so the reads interleave with
-        // the replacements instead of all landing after the last one.
+        // Hold here until every reader has observed a replaced value, so the reads interleave with the
+        // replacements instead of all landing after the last one. Assert the count taken here: after the
+        // loop every reader can still reach round_999, so the live count cannot show when it got there.
         if (i == 0)
-            while (readers_saw_replacement.load(std::memory_order_relaxed) < num_readers)
-                std::this_thread::yield();
+            saw_replacement_in_loop = wait_for_all_readers(readers_saw_replacement, num_readers);
     }
 
     stop.store(true, std::memory_order_relaxed);
@@ -147,7 +160,7 @@ TEST(LayeredConfiguration, ReplaceByLabelConcurrentReads)
     EXPECT_FALSE(saw_bad_value.load());
     EXPECT_GE(read_count.load(), num_readers);
     EXPECT_EQ(num_readers, readers_saw_initial.load());
-    EXPECT_EQ(num_readers, readers_saw_replacement.load());
+    EXPECT_EQ(num_readers, saw_replacement_in_loop);
 
     // After all replacements, the last value should be visible.
     EXPECT_EQ("round_999", lc->getString("key"));
