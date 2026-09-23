@@ -19,6 +19,7 @@
                 <access_key_id>minio</access_key_id>
                 <secret_access_key>ClickHouse_Minio_P@ssw0rd</secret_access_key>
                 <remove_shared_recursive_file_limit>4</remove_shared_recursive_file_limit>
+                <wait_for_blob_removal>false</wait_for_blob_removal>
             </test3>
             <test4>
                 <type>s3</type>

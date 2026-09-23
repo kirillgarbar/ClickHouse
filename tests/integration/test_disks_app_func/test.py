@@ -421,3 +421,35 @@ def test_remote_disk_list(started_cluster):
 
     assert ".:\nstore\n" in out
     assert "\n./store:\n" in out
+
+
+def test_disks_app_removes_s3_blobs_on_shutdown_98933(started_cluster):
+    source = cluster.instances["disks_app_test"]
+    minio = cluster.minio_client
+    path = "issue_98933.txt"
+
+    objects_before = {
+        obj.object_name
+        for obj in minio.list_objects(cluster.minio_bucket, "data/", recursive=True)
+    }
+
+    write(source, "test3", path)
+    objects_created = {
+        obj.object_name
+        for obj in minio.list_objects(cluster.minio_bucket, "data/", recursive=True)
+    } - objects_before
+    assert objects_created
+
+    try:
+        remove(source, "test3", path)
+
+        objects_after_remove = {
+            obj.object_name
+            for obj in minio.list_objects(
+                cluster.minio_bucket, "data/", recursive=True
+            )
+        }
+        assert objects_created.isdisjoint(objects_after_remove)
+    finally:
+        for object_name in objects_created:
+            minio.remove_object(cluster.minio_bucket, object_name)
